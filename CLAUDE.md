@@ -4,7 +4,7 @@
 
 出生依据：user 2026-10-01「日语学习那边逼出来了per sentence tts的需求，作为可选插件。然后我建议一开始就做成共享库，因为wxhw的验证读一遍也很有用」「记得模块化不要bloatware」「设置分栏 公共字体 逐句朗读 亮屏连续 做」。
 评估、实测数字、提案 .h = `../ai-docs/20261001-read-aloud-shared-lib-assessment.md`。
-**库名 `read-aloud` 是 AI 先起的，等 user 定**（改名 = 改 package.json 的 name、四个脚本里的包名、宿主的 import）。
+**库名 `read-aloud` 是 AI 先起的**；user 批 0.1.0 时没提出异议，也没点名确认（改名 = 改 package.json 的 name、四个脚本里的包名、宿主的 import）。
 
 - **本库 = 逐句朗读**：把一段文字切成句子、一句一句合成成语音、播出来、报「现在读到哪一句」。
 - **三层，各自可单独用**（`src/index.ts` 头注释）：① 分句（纯函数）② 连读控制器（零 DOM）③ 引擎门面 + 喇叭（浏览器）。worker 是「公共运行时 `src/worker/runtime.ts` + 每种引擎一个入口」（`./worker-sherpa` …），宿主把用得上的入口单独打成一个文件。
@@ -16,7 +16,7 @@
 - **后端可换**：`src/worker/backend.ts` 是一种引擎一个后端的形状。现有两个：`piper-plus.ts`（接 `backend/piper-plus/`，つくよみちゃん用；user 2026-10-01「先用她来兜底，以后慢慢加」）和 `sherpa.ts`（家族已 vendor 的 sherpa-onnx WASM，留给以后加别的音色）。**`backend/piper-plus/` 的 JS 逐字来自排查现场 `~/jupyter/third-party/piper-plus/backend/`**（证明它和电脑参考实现喂给模型的东西逐符号相同的测试都在那边）：改算法先在那边改、跑那边的对照测试，再拷过来。
 - **句间停顿归控制器**（同段 600 ms、跨段 900 ms，可配；600 = piper-plus 参考实现的句间静音。句内逗号处的停顿归后端）：合成出来的一句首尾几乎没有静音，不留气口听着就是「不喘气」。
 - **两处逐字拷贝，记账**：`src/sha256.ts` 和 worker 里「下载 / 校验 / 缓存」那一半来自 WebXiaoHeiWu `src/asr/`。WXHW 的识别这轮不动；等本库稳定后让它改吃本库，两份才合一。改算法 = 两边一起改。
-- **版本纪律同其他内部库**：开发期 `0.0.0`；版本号只在 user 过目真实导出面（`api/read-aloud.api.md`）之后才写；收货脚本只认打过 tag 的已发版；**发 0.1.0 之前必须 user 批**。
+- **版本纪律同其他内部库**：现行 `0.1.0`（2026-10-01 首发，user「库发0.1.0」）；**之后每次 bump minor 都要先找 user 批**（patch AI 看着办）；收货脚本只认打过 tag 的已发版。发版 = 写版本号 → `bash scripts/release.sh` → commit → tag `v<版本>`。本库现在没有远端，宿主收货走本机的 release 产物。
 - **开发期往宿主里装包只许用 `scripts/dev-install.sh`**（逐字节验货，拒绝往宿主的 main 上装）。
 - **只出货不送货**：本库的活到 commit 交付物为止；宿主收货、跑宿主测试、宿主发版是宿主 session 的活。
 - 测试两档：`npm test`（node：分句 / 控制器 / 包的纯函数 / 红线守卫）+ `npm run e2e`（构建后在无头 Chromium 里走整链：两种真引擎 + 真语音包 + 真 Cache + 真 Web Audio，约一分钟；包在检疫桶：sherpa 测试包 `~/jupyter/third-party/sherpa-onnx-wasm/tts-probe/packs-test/`，つくよみちゃん五个小包 `~/jupyter/third-party/piper-plus/packs-local/`，由 `…/piper-plus/backend/build-packs.mjs` 打）。构建 + 户口 `npm run build`（`api/` 是生成物，勿手改）。
