@@ -1,61 +1,90 @@
 // text.js — small text helpers of the backend that are NOT part of the reference runtime's behaviour.
 // created 2026-10-01 by Claude Fable 5.1
 
-const CLAUSE_BREAK = new Set([",", ";", ":", "，", "；", "：", "、"]);
-// Dashes: a run of dash characters, or two or more ASCII hyphens (`these--first`, Project Gutenberg style). One hyphen is a hyphen.
+// ---- pauses inside one sentence (English / Chinese) -------------------------------------------------------------------
+// The model gets no pause token at punctuation in these languages, so the reference runtime reads a whole span in one breath.
+// The backend cuts the span into pieces, synthesizes them separately and joins them with silence.
+//
+// Systematic rule (instead of one special case per character sequence): everything between two runs of speakable text is ONE
+// punctuation cluster (`，“`  `！”`  `？”“`  `——`  `，”`  `, "`). The classes present in the cluster decide the pause:
+//
+//   cluster contains            kind     pause    example                                   glued when
+//   sentence-final mark         strong   400 ms   呀！”|苏…   走。”|“好   他想……|算了        a side has < 2 letters / digits / hanzi
+//   dash run (—— / --)          dash     350 ms   these--|first   一下——|然后               same
+//   clause mark + opening quote intro    350 ms   他说，|“好。”   She said,|"Wait."          same
+//   clause mark (, ; : ， ； ： 、) weak     250 ms   很好，|我们   “好吧，”|他说             piece shorter than minChars -> glued to the NEXT
+//   quotes / brackets only      none     —        所谓“自由”的意思                          —
+//
+// The cut is always placed before the first opening quote of the cluster (the quote belongs to what follows), otherwise at the
+// end of the cluster. ASCII "." is not a mark here (inside a span it is a decimal point or an abbreviation); a comma or colon
+// between two digits (1,980 / 3:45) and a single hyphen are part of the text. Nothing is cut inside inline maths / inline code.
+export const PAUSE_MS = Object.freeze({ strong: 400, dash: 350, intro: 350, weak: 250 });
+const TERM = new Set(["。", "！", "？", "!", "?", "…", "‥"]);
+const CLAUSE = new Set([",", ";", ":", "，", "；", "：", "、"]);
 const DASH = new Set(["—", "–", "―", "─"]);
-// Sentence-final marks that can sit INSIDE one sentence span (the sentence splitter keeps `“…！”他说，` together, and so it should).
-// ASCII "." is left out on purpose: inside a span it is a decimal point or an abbreviation.
-const STRONG_BREAK = new Set(["。", "！", "？", "!", "?", "…", "‥"]);
-const CLOSERS = new Set(["”", "’", "」", "』", "）", ")", "】", "》", "〉", "〟", '"', "'"]);
+const OPEN = new Set(["“", "‘", "「", "『", "（", "(", "【", "《", "〈", "〝", "[", "［"]);
+const CLOSE = new Set(["”", "’", "」", "』", "）", ")", "】", "》", "〉", "〟", "]", "］"]);
 const isDigit = (c) => c !== undefined && c >= "0" && c <= "9";
+const isSpeak = (c) => c !== undefined && /[\p{L}\p{N}]/u.test(c);
+const isSpace = (c) => c === " " || c === "\t" || c === "　" || c === " ";
 const speakable = (s) => (s.match(/[\p{L}\p{N}]/gu) || []).length;
 // Inline maths / inline code (`…`, \(…\), $…$ with the dollars touching the content): never cut inside.
 const INLINE_VERBATIM = /`[^`\n]+`|\\\([^\n]*?\\\)|\$(?=[^\s$])[^$\n]*[^\s$]\$(?!\d)|\$[^\s$]\$(?!\d)/g;
 
+/** Class of the character at i: "term" | "clause" | "dash" | "open" | "close" | "space" | "text". */
+function classAt(chars, i) {
+  const ch = chars[i];
+  if (TERM.has(ch)) return "term";
+  if (CLAUSE.has(ch)) return (ch === "," || ch === ":") && isDigit(chars[i - 1]) && isDigit(chars[i + 1]) ? "text" : "clause";
+  if (DASH.has(ch)) return "dash";
+  if (ch === "-") return chars[i + 1] === "-" || chars[i - 1] === "-" ? "dash" : "text";
+  if (OPEN.has(ch)) return "open";
+  if (CLOSE.has(ch)) return ch === "’" && isSpeak(chars[i - 1]) && isSpeak(chars[i + 1]) ? "text" : "close";   // don’t
+  if (ch === '"' || ch === "'") {   // ASCII quotes: an apostrophe inside a word is text; otherwise open before a word, close after one
+    const before = isSpeak(chars[i - 1]), after = isSpeak(chars[i + 1]);
+    if (ch === "'" && before && after) return "text";
+    return after && !before ? "open" : "close";
+  }
+  if (isSpace(ch)) return "space";
+  return "text";
+}
+
 /**
- * Cut one sentence into the pieces that are synthesized separately and joined with a short silence.
- *   weak break   after clause punctuation (, ; : ， ； ： 、). A piece shorter than `minChars` is glued to the NEXT piece
- *                (`second, because …`); a short last piece is glued to the one before it.
- *                A comma or colon between two digits (1,980 / 3:45) is not a break.
- *   dash break   after a run of dashes (— – ―) or of two or more ASCII hyphens: `…were these--` | `first, …`.
- *   strong break after sentence-final marks in the middle of the span (。！？!?… plus any closing quotes / brackets that follow),
- *                e.g. `“可是船上有奶牛呀！”苏一边跑一边说，` -> `“可是船上有奶牛呀！”` | `苏一边跑一边说，`.
- *   Dash and strong breaks are glued only when one side has fewer than 2 letters / digits / hanzi (`啊！啊！快跑。` stays
- *   `啊！啊！` | `快跑。`).
- *   Nothing is cut inside inline maths / inline code.
- * Why: English and Chinese get no pause token at punctuation (the model's phoneme map has no symbol for it), so the reference
- * runtime reads a whole span in one breath. Which kind of break a piece ended at: `endsStrong(piece)` / `endsDash(piece)`.
+ * Cut one sentence into pieces with the pause that follows each (the last piece has pauseMs 0).
  * @param {string} sentence
- * @param {number} [minChars]
- * @returns {string[]}
+ * @param {number} [minChars] weak-break pieces shorter than this are glued (en: 20, zh: 5)
+ * @returns {{ text: string, kind: "strong" | "dash" | "intro" | "weak" | "end", pauseMs: number }[]}
  */
-export function splitClauses(sentence, minChars = 20) {
+export function splitClausesDetailed(sentence, minChars = 20) {
   // code-unit ranges that must stay whole -> the same ranges in code points (the loop below walks code points)
   const keep = []; INLINE_VERBATIM.lastIndex = 0;
   for (let m = INLINE_VERBATIM.exec(sentence); m; m = INLINE_VERBATIM.exec(sentence)) { const a = Array.from(sentence.slice(0, m.index)).length; keep.push([a, a + Array.from(m[0]).length]); }
-  const chars = Array.from(sentence), raw = []; let cur = "", k = 0;
-  const isDash = (i) => DASH.has(chars[i]) || (chars[i] === "-" && (chars[i + 1] === "-" || chars[i - 1] === "-"));
-  for (let i = 0; i < chars.length; i++) {
+  const chars = Array.from(sentence), cls = new Array(chars.length);
+  for (let i = 0, k = 0; i < chars.length; i++) {
     while (k < keep.length && keep[k][1] <= i) k++;
-    if (k < keep.length && keep[k][0] === i) { cur += chars.slice(i, keep[k][1]).join(""); i = keep[k][1] - 1; continue; }
-    const ch = chars[i]; cur += ch;
-    if (STRONG_BREAK.has(ch)) {
-      if (STRONG_BREAK.has(chars[i + 1])) continue;                                   // ？！ / …… : break after the last one
-      while (CLOSERS.has(chars[i + 1])) cur += chars[++i];                             // the closing quote belongs to this piece
-      raw.push({ text: cur, kind: "strong" }); cur = ""; continue;
-    }
-    if (isDash(i)) {
-      if (isDash(i + 1)) continue;                                                     // —— / --- : break after the run
-      raw.push({ text: cur, kind: "dash" }); cur = ""; continue;
-    }
-    if (!CLAUSE_BREAK.has(ch)) continue;
-    if ((ch === "," || ch === ":") && isDigit(chars[i - 1]) && isDigit(chars[i + 1])) continue;
-    raw.push({ text: cur, kind: "weak" }); cur = "";
+    cls[i] = k < keep.length && keep[k][0] <= i ? "text" : classAt(chars, i);
   }
-  if (cur) raw.push({ text: cur, kind: "weak" });
+  // walk the clusters: a maximal run of non-text characters that holds at least one mark
+  const raw = []; let from = 0, i = 0, seenText = false;
+  while (i < chars.length) {
+    if (cls[i] === "text") { seenText = true; i++; continue; }
+    let j = i; const has = { term: false, clause: false, dash: false, open: false, close: false };
+    let firstOpen = -1, markBeforeOpen = false;
+    while (j < chars.length && cls[j] !== "text") {
+      const c = cls[j];
+      if (c !== "space") { has[c] = true; if (c === "open") { if (firstOpen < 0) firstOpen = j; } else if (firstOpen < 0) markBeforeOpen = true; }
+      j++;
+    }
+    const kind = has.term ? "strong" : has.dash ? "dash" : has.clause && has.open ? "intro" : has.clause ? "weak" : null;
+    if (kind && seenText && j < chars.length) {   // a cluster at the very start or the very end is not a break
+      const cutAt = firstOpen >= 0 && markBeforeOpen ? firstOpen : j;
+      raw.push({ text: chars.slice(from, cutAt).join(""), kind }); from = cutAt;
+    }
+    i = j;
+  }
+  if (from < chars.length) raw.push({ text: chars.slice(from).join(""), kind: "end" });
   // Gluing. A short piece that ends at a weak break introduces what follows (`second, because …`), so it is carried FORWARD;
-  // only a short tail (nothing after it) is glued backward.
+  // only a short tail (nothing after it) is glued backward. The other kinds are glued only around a piece with < 2 speakable chars.
   const len = (t) => Array.from(t).length;
   const join = (a, b, kindOfA) => a + (/[\x21-\x7e]$/.test(a) && /^[\x21-\x7e]/.test(b) && kindOfA !== "dash" ? " " : "") + b;
   const pieces = raw.map((p) => ({ text: p.text.trim(), kind: p.kind })).filter((p) => p.text);
@@ -69,12 +98,10 @@ export function splitClauses(sentence, minChars = 20) {
     if (glueBack) { prev.text = join(prev.text, text, prev.kind); prev.kind = p.kind; }
     else out.push({ text, kind: p.kind });
   });
-  return out.map((p) => p.text);
+  return out.map((p, idx) => ({ text: p.text, kind: idx === out.length - 1 ? "end" : p.kind, pauseMs: idx === out.length - 1 ? 0 : PAUSE_MS[p.kind] ?? PAUSE_MS.weak }));
 }
-/** Did this piece end at a strong break (sentence-final mark, optionally followed by closing quotes)? The pause after it is the longest. */
-export function endsStrong(piece) { return /[。！？!?…‥]["'”’」』）)】》〉〟]*$/u.test(piece); }
-/** Did this piece end at a dash break? */
-export function endsDash(piece) { return /(?:--+|[—–―─]+)$/u.test(piece); }
+/** The pieces only. @param {string} sentence @param {number} [minChars] @returns {string[]} */
+export function splitClauses(sentence, minChars = 20) { return splitClausesDetailed(sentence, minChars).map((p) => p.text); }
 
 // ---- Chinese: Arabic numerals -> hanzi -------------------------------------------------------------------------------
 // The reference Chinese G2P (and the Rust WASM) silently DROPS digits: "2026年10月1日" would be read as "年月日".

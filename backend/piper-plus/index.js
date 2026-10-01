@@ -10,10 +10,9 @@
 //   ja  ja-frontend.js  OpenJTalk from pyopenjtalk-plus (WASM) + its dictionary + JS port of its rule passes
 //   en  en-g2p.js       CMUdict + port of upstream english.py (the piper-plus WASM has no English phonemizer)
 //   zh  zh-g2p.js       JS port of the piper-plus Rust G2P (no 60 MB WASM)
-// Not reference behaviour, on purpose: for en and zh a sentence is cut at clause punctuation and the pieces are joined with
-// 250 ms of silence, and at sentence-final marks inside the span (`“…！”他说，`) with 400 ms (the model gets no pause token at
-// punctuation in those languages); Chinese digits are written out in hanzi
-// first (the reference drops them silently).
+// Not reference behaviour, on purpose: for en and zh a sentence is cut at punctuation clusters and the pieces are joined with
+// silence (table of cluster kinds and pause lengths: text.js); the model gets no pause token at punctuation in those languages.
+// Chinese digits are written out in hanzi first (the reference drops them silently).
 
 import * as ort from "./vendor/onnxruntime-web/ort.wasm.bundle.min.mjs";
 import createOjtModule from "./vendor/ojt/ojt.mjs";
@@ -22,7 +21,7 @@ import { createEnglishG2p } from "./en-g2p.js";
 import { createChineseG2p } from "./zh-g2p.js";
 import { encodeTokens, segmentText } from "./encode.js";
 import { createVits } from "./vits.js";
-import { splitClauses, endsStrong, endsDash, normalizeZhNumbers } from "./text.js";
+import { splitClausesDetailed, normalizeZhNumbers } from "./text.js";
 
 /** Names the backend looks up in `ctx.files`. A language is offered only when ALL of its files are present. */
 const FILES = Object.freeze({
@@ -32,7 +31,7 @@ const FILES = Object.freeze({
   zh: ["zh/pinyin_single.tone3.json", "zh/pinyin_phrases.tone3.json"],
 });
 const SCALES = Object.freeze({ noiseScale: 0.667, lengthScale: 1.5, noiseW: 0.5 });   // model README; config.json's 1.0 / 0.8 is the "rushed" setting
-const CLAUSE_SILENCE_MS = 250, DASH_SILENCE_MS = 350, STRONG_SILENCE_MS = 400, MIN_CLAUSE_CHARS = { en: 20, zh: 5 };   // pause after a comma-like break / after a sentence-final mark inside the span
+const MIN_CLAUSE_CHARS = { en: 20, zh: 5 };   // weak-break pieces shorter than this are glued; the pause lengths live in text.js (PAUSE_MS)
 
 const bytesOf = (files, name) => { const v = files.get(name); if (v === undefined) throw new Error(`piper-plus backend: "${name}" is missing from ctx.files`); return v instanceof Uint8Array ? v : new Uint8Array(v); };
 const jsonOf = (files, name) => JSON.parse(new TextDecoder().decode(bytesOf(files, name)));
@@ -125,15 +124,15 @@ export function createPiperPlusBackend() {
       const speed = Math.min(4, Math.max(0.25, Number.isFinite(o.speed) && o.speed > 0 ? o.speed : 1));
       const scales = { ...SCALES, lengthScale: SCALES.lengthScale / speed };
       const sr = state.vits.sampleRate, str = String(text ?? "");
-      const pieces = lang === "ja" ? [str] : splitClauses(str, MIN_CLAUSE_CHARS[lang] ?? 20);
+      const pieces = lang === "ja" ? [{ text: str, pauseMs: 0 }] : splitClausesDetailed(str, MIN_CLAUSE_CHARS[lang] ?? 20);
       const clips = [], gaps = [], debug = [];   // gaps[i] = silence (samples) after clip i
-      for (const piece of pieces) {
+      for (const { text: piece, pauseMs } of pieces) {
         if (!piece.trim()) continue;
         const { ids, pros } = state.g2p[lang](piece);
         if (ids.length <= 3) continue;   // BOS, pad, EOS only: nothing pronounceable (punctuation, unknown symbols)
         const r = await state.vits.synthIds(ids, pros, lang, scales);
         clips.push(r.samples);
-        gaps.push(Math.round(((endsStrong(piece) ? STRONG_SILENCE_MS : endsDash(piece) ? DASH_SILENCE_MS : CLAUSE_SILENCE_MS) / 1000) * sr));
+        gaps.push(Math.round((pauseMs / 1000) * sr));
         if (o.__debug) debug.push({ text: piece, ...r.inputs });
       }
       const total = clips.reduce((a, c) => a + c.length, 0) + gaps.slice(0, -1).reduce((a, g) => a + g, 0);
