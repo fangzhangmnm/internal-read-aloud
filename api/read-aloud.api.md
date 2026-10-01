@@ -56,6 +56,9 @@ export interface LoadResult {
 }
 
 // @public
+export function logicalName(path: string): string;
+
+// @public
 export const MAX_SPAN = 160;
 
 // @public (undocumented)
@@ -213,7 +216,7 @@ export interface ReadAloudOptions {
 export type ReadAloudState = "idle" | "loading" | "playing" | "paused";
 
 // @public
-export function resolvePackPaths<T>(config: T, dir: string, files: readonly PackFile[]): T;
+export function resolvePackPaths<T>(config: T, dir: string, files: readonly string[]): T;
 
 // @public
 export function sentenceAt(spans: readonly SentenceSpan[], offset: number): number;
@@ -261,9 +264,9 @@ export interface SpeechEngine extends Synthesizer {
 // @public (undocumented)
 export interface SpeechEngineDeps {
     cacheName?: string;
-    engineBase: string;
+    engineBase?: string;
     packs: Record<string, EmbeddedPack>;
-    workerUrl: string;
+    workers: Record<string, WorkerSpec>;
 }
 
 // @public
@@ -286,6 +289,14 @@ export interface Synthesizer {
 export interface WebAudioSink extends AudioSink {
     close(): void;
     unlock(): void;
+}
+
+// @public
+export interface WorkerSpec {
+    // (undocumented)
+    type?: "classic" | "module";
+    // (undocumented)
+    url: string;
 }
 
 // (No @packageDocumentation comment for this package)

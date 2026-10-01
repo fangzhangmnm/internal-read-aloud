@@ -12,7 +12,7 @@ window.e2e = {
   async make(slugs, cacheName) {
     const packs = {};
     for (const s of slugs) packs[s] = await embed("/models", s);
-    const engine = createSpeechEngine({ workerUrl: "./.out/worker.js", engineBase: "/engine/", packs, cacheName });
+    const engine = createSpeechEngine({ workers: { "sherpa-onnx": { url: "./.out/worker.js" } }, engineBase: "/engine/", packs, cacheName });
     const sink = createWebAudioSink();
     const ra = createReadAloud({ engine, sink, sentenceGapMs: 40, paragraphGapMs: 80 });
     const events = [];

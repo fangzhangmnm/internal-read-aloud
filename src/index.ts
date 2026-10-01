@@ -4,10 +4,10 @@
 //   ① 分句（纯函数）            splitSentences / sentenceAt / detectLang
 //   ② 连读控制器（零 DOM）       createReadAloud —— 要一个 synth 和一个喇叭，报「读到哪一句」；不画任何界面
 //   ③ 引擎门面 + 喇叭（浏览器）  createSpeechEngine（worker、引擎 WASM、语音包全懒）/ createWebAudioSink
-// worker 入口是另一个导出：`@internal/read-aloud/worker`（宿主单独打成一个文件，把 URL 给 createSpeechEngine）。
+// worker 入口是另外的导出，一种引擎一个：`@internal/read-aloud/worker-sherpa` …（宿主把用得上的单独打成文件，URL 给 createSpeechEngine）。
 export { splitSentences, sentenceAt, detectLang, MAX_SPAN, type SentenceSpan, type SpeechLang } from "./sentences.ts";
 export { createReadAloud, type ReadAloud, type ReadAloudDeps, type ReadAloudOptions, type ReadAloudState, type ReadAloudEvents, type Clip, type Synthesizer, type AudioSink, type Playback } from "./read-aloud.ts";
-export { createSpeechEngine, type SpeechEngine, type SpeechEngineDeps } from "./engine.ts";
+export { createSpeechEngine, type SpeechEngine, type SpeechEngineDeps, type WorkerSpec } from "./engine.ts";
 export { createWebAudioSink, type WebAudioSink } from "./sink.ts";
-export { assembleFiles, resolvePackPaths, type PackManifest, type PackFile, type PackChunk, type EmbeddedPack, type SherpaTtsEngineConfig } from "./packs.ts";
+export { assembleFiles, resolvePackPaths, logicalName, type PackManifest, type PackFile, type PackChunk, type EmbeddedPack, type SherpaTtsEngineConfig } from "./packs.ts";
 export type { PackStatus, PackProgress, LoadResult } from "./protocol.ts";

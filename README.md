@@ -10,8 +10,8 @@ PWA 家族共享的逐句朗读：文字 → 句子 → 本机合成 → 播放�
 import { createSpeechEngine, createWebAudioSink, createReadAloud } from "@internal/read-aloud";
 
 const engine = createSpeechEngine({
-  workerUrl,                    // 宿主 build 把 "@internal/read-aloud/worker" 单独打成一个 classic worker 文件（esbuild --format=iife），带 hash 的路径传进来
-  engineBase: "./vendor/…/",    // 宿主 vendor 的引擎文件目录
+  workers: { "sherpa-onnx": { url: workerUrl } },   // 清单里的 engine 名 → worker 脚本。宿主 build 把 "@internal/read-aloud/worker-sherpa" 单独打成一个文件（esbuild --format=iife），带 hash 的路径传进来
+  engineBase: "./vendor/…/",    // 只有二进制由宿主 vendor 的引擎才用（sherpa-onnx）
   packs: PACKS,                 // 宿主内嵌的语音包清单：{ [slug]: { packId, manifest } }（信任根）
 });
 const sink = createWebAudioSink();
@@ -33,4 +33,4 @@ button.onclick = async () => {
 
 ## 语音包（engineConfig 约定）
 
-模型仓 pack 的 `task` = `"tts"`，`engine` = `"sherpa-onnx"`，`engineConfig` 形状见 `src/packs.ts` 的 `SherpaTtsEngineConfig`：`config` 原样交给 sherpa 的 `OfflineTts`，里面出现的包内文件名由库补上挂载目录；`voices` / `langs` 给宿主画设置页。
+模型仓 pack 的 `task` = `"tts"`，`engine` = `"sherpa-onnx"`，`engineConfig` 形状见 `src/packs.ts` 的 `SherpaTtsEngineConfig`：`config` 原样交给 sherpa 的 `OfflineTts`，里面出现的包内文件名由库补上挂载目录；`voices` / `langs` 给宿主画设置页。包里以 `.gz` 结尾的文件是压缩存放的，worker 装进引擎前解开，后端看到的名字不带 `.gz`。

@@ -38,6 +38,11 @@ export declare interface LoadResult {
     voices: number;
 }
 
+/**
+ * 包里压缩存放的文件以 `.gz` 结尾；后端看到的名字去掉这个后缀（worker 运行时负责解开）。
+ */
+export declare function logicalName(path: string): string;
+
 /** 一句最多这么多码元；超过就找逗号断（合成引擎对超长输入又慢又容易念崩）。 */
 export declare const MAX_SPAN = 160;
 
@@ -152,10 +157,10 @@ export declare interface ReadAloudOptions {
 export declare type ReadAloudState = "idle" | "loading" | "playing" | "paused";
 
 /**
- * 给引擎配置里的包内文件名补上挂载目录。规则：配置里任何字符串值，按逗号拆开后**每一段都是包里的文件名或目录名**，就整段补目录；别的字符串原样。
+ * 给引擎配置里的包内文件名补上挂载目录。files = 后端看到的文件名（已去 `.gz`）。规则：配置里任何字符串值，按逗号拆开后**每一段都是包里的文件名或目录名**，就整段补目录；别的字符串原样。
  * （所以 "cpu"、"ja" 这种不会被误伤；"a.fst,b.fst" 这种逗号表会逐项补。）返回新对象，不改入参。
  */
-export declare function resolvePackPaths<T>(config: T, dir: string, files: readonly PackFile[]): T;
+export declare function resolvePackPaths<T>(config: T, dir: string, files: readonly string[]): T;
 
 /** offset 落在哪一句：在句内 → 那一句；在两句之间 → 后面那一句；过了最后一句 → 最后一句；没有句子 → -1。 */
 export declare function sentenceAt(spans: readonly SentenceSpan[], offset: number): number;
@@ -202,17 +207,17 @@ export declare interface SpeechEngine extends Synthesizer {
     loaded(): string | null;
     /** 最近一次 status / download / delete 的结论（同步问「有没有包」用）；没问过 = undefined。 */
     isKnownReady(slug: string): boolean | undefined;
-    /** 关掉 worker，归还内存（WASM 堆只涨不缩，这是唯一的归还办法）。之后再用会重新起。 */
+    /** 关掉所有 worker，归还内存（WASM 堆只涨不缩，这是唯一的归还办法）。之后再用会重新起。 */
     dispose(): void;
 }
 
 export declare interface SpeechEngineDeps {
-    /** worker 脚本的 URL（宿主把本库的 ./worker 入口单独打成一个文件，build 时注入带 hash 的路径）。 */
-    workerUrl: string;
-    /** 引擎文件（WASM + 胶水）所在目录，相对页面或绝对都行；宿主 vendor 它。 */
-    engineBase: string;
+    /** 清单里的 engine 名 → worker 脚本（本库的 `./worker-<引擎>` 入口，宿主单独打成一个文件）。 */
+    workers: Record<string, WorkerSpec>;
     /** 宿主内嵌的语音包清单（信任根）。 */
     packs: Record<string, EmbeddedPack>;
+    /** 引擎文件目录（相对页面或绝对）：只有二进制由宿主 vendor 的引擎才用（sherpa-onnx）；二进制随语音包走的引擎不用给。 */
+    engineBase?: string;
     /** 语音包缓存名；默认家族共享的 "pwa-models"（同源兄弟 app 下过的包直接能用）。 */
     cacheName?: string;
 }
@@ -236,6 +241,12 @@ export declare interface WebAudioSink extends AudioSink {
     unlock(): void;
     /** 放掉 AudioContext（宿主退出朗读时调；之后再 unlock 会重建）。 */
     close(): void;
+}
+
+/** 一个 worker 脚本：url 由宿主 build 注入（带 hash）；type 缺省 classic。 */
+export declare interface WorkerSpec {
+    url: string;
+    type?: "classic" | "module";
 }
 
 export { }

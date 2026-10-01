@@ -1,15 +1,15 @@
-// 朗读 worker 入口：语音包的下载 / 校验 / 缓存 / 取出 + 把合成请求转给后端。主线程只经 src/engine.ts 发消息。
+// 朗读 worker 的公共运行时：语音包的下载 / 校验 / 缓存 / 取出 + 把合成请求转给后端。主线程只经 src/engine.ts 发消息。
+// 每种引擎一个入口文件（sherpa-entry.ts / piper-plus-entry.ts），入口只做一件事：startWorker({ 引擎名: 后端工厂 })。
 // created 2026-10-01 by Claude Fable 5.1（包的那一半移植自 WebXiaoHeiWu src/asr/worker.ts，2026-09-03 同一作者）
 //
 //   · 信任根 = 宿主内嵌的清单（init 时给）：分片从「模型源 URL / 用户导入的文件」来都先对 chunks[].sha256 再入缓存；对不上整包拒收。
 //   · 缓存 = Cache Storage（名字由宿主给，默认家族共享的 `pwa-models`；key 是本 origin 下的合成路径 /__pwa-models__/<slug>/<chunk>，永不真的去 fetch 它）。
 //   · **本库里唯一允许联网、唯一允许碰 Cache Storage 的文件**（test/redline-guard 守）。联网只有一种：GET 模型源的分片，到手先验。
-//   · 宿主把本文件单独打成一个 classic worker 脚本（esbuild --format=iife）。
+//   · 包里以 `.gz` 结尾的文件是压缩存放的：装进引擎前在这里解开，后端看到的是去掉 `.gz` 的名字和解开后的字节。
 import { Sha256 } from "../sha256.ts";
-import { assembleFiles, type PackManifest } from "../packs.ts";
+import { assembleFiles, logicalName, type PackManifest } from "../packs.ts";
 import type { Request, Response, PackProgress, PackStatus, LoadResult, WorkerInit } from "../protocol.ts";
 import type { Backend } from "./backend.ts";
-import { createSherpaBackend } from "./sherpa.ts";
 
 const post = (m: Response, transfer: Transferable[] = []) => (self as unknown as { postMessage(m: unknown, t: Transferable[]): void }).postMessage(m, transfer);
 const keyOf = (slug: string, name: string) => `${self.location.origin}/__pwa-models__/${slug}/${name}`;
@@ -111,7 +111,10 @@ async function deletePack(slug: string): Promise<void> {
 }
 
 // ── 引擎 ──
-const BACKENDS: Record<string, () => Backend> = { "sherpa-onnx": createSherpaBackend };
+let BACKENDS: Record<string, () => Backend> = {};
+async function gunzip(b: Uint8Array): Promise<Uint8Array> {
+  return new Uint8Array(await new Response(new Blob([b as unknown as BlobPart]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+}
 let loaded: { slug: string; backend: Backend; info: { sampleRate: number; voices: number } } | null = null;
 
 function unload(): void { if (loaded) { try { loaded.backend.unload(); } catch { /* ignore */ } loaded = null; } }
@@ -131,8 +134,14 @@ async function load(slug: string): Promise<LoadResult> {
     if (!r) throw new Error("pack-missing");
     chunks.push(new Uint8Array(await r.arrayBuffer()));
   }
-  const files = assembleFiles(m, chunks);
+  const raw = assembleFiles(m, chunks);
   chunks.length = 0;
+  const files = new Map<string, Uint8Array>();
+  for (let i = 0; i < m.files.length; i++) {
+    const path = m.files[i]!.path, name = logicalName(path);
+    files.set(name, name === path ? raw[i]! : await gunzip(raw[i]!));
+    raw[i] = new Uint8Array(0);   // 放手：压缩件解开后原字节不留
+  }
   const backend = make();
   const t0 = performance.now();
   const info = await backend.load({ engineBase: cfg().engineBase, manifest: m, files });
@@ -142,7 +151,12 @@ async function load(slug: string): Promise<LoadResult> {
 
 // ── 消息泵（严格串行：引擎单线程，请求排队） ──
 let chain: Promise<unknown> = Promise.resolve();
-self.onmessage = (e: MessageEvent<Request>) => {
+/** 入口调用：登记这个 worker 认得的后端（按清单里的 engine 名），开始收消息。 */
+export function startWorker(backends: Record<string, () => Backend>): void {
+  BACKENDS = backends;
+  self.onmessage = onMessage;
+}
+function onMessage(e: MessageEvent<Request>): void {
   const req = e.data;
   const progress = (p: PackProgress) => post({ id: req.id, progress: p });
   chain = chain.then(async () => {
@@ -168,4 +182,4 @@ self.onmessage = (e: MessageEvent<Request>) => {
       post({ id: req.id, ok: false, error: err instanceof Error ? err.message : String(err) });
     }
   });
-};
+}

@@ -18,9 +18,9 @@ const FORBIDDEN = [
   [/\bspeechSynthesis\b/, "speechSynthesis（系统朗读：桌面浏览器会把文字发到服务器）"], [/\bSpeechSynthesisUtterance\b/, "SpeechSynthesisUtterance"],
   [/\bSpeechRecognition\b/, "SpeechRecognition"], [/\bgetUserMedia\b/, "getUserMedia（本库不碰麦克风）"],
 ];
-/** 只准出现在 src/worker/index.ts 的。 */
+/** 只准出现在 src/worker/runtime.ts 的。 */
 const WORKER_ONLY = [[/\bfetch\s*\(/, "fetch("], [/\bcaches\s*\./, "caches.（Cache Storage）"]];
-const ALLOWED = "worker/index.ts";
+const ALLOWED = "worker/runtime.ts";
 
 describe("红线守卫", () => {
   it("零本地存储 / 零系统语音 / 零别的外发通道", () => {
@@ -28,7 +28,7 @@ describe("红线守卫", () => {
     for (const p of walk(SRC)) { const code = codeOnly(readFileSync(p, "utf8")); for (const [re, why] of FORBIDDEN) if (re.test(code)) hits.push(`${relative(SRC, p)}: ${why}`); }
     eq(hits.join("\n"), "");
   });
-  it("联网与 Cache Storage 只在 src/worker/index.ts（下载语音包分片：只读 GET，到手先验）", () => {
+  it("联网与 Cache Storage 只在 src/worker/runtime.ts（下载语音包分片：只读 GET，到手先验）", () => {
     const hits = [];
     for (const p of walk(SRC)) { const rel = relative(SRC, p).replace(/\\/g, "/"); if (rel === ALLOWED) continue; const code = codeOnly(readFileSync(p, "utf8")); for (const [re, why] of WORKER_ONLY) if (re.test(code)) hits.push(`${rel}: ${why}`); }
     eq(hits.join("\n"), "");

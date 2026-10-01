@@ -42,14 +42,14 @@ export function createSherpaBackend(): Backend {
       const dir = `/packs/${m.slug}`;
       const mkdirp = (p: string) => { let cur = ""; for (const part of p.split("/").filter(Boolean)) { cur += "/" + part; try { Module.FS.mkdir(cur); } catch { /* exists */ } } };
       mkdirp(dir);
-      m.files.forEach((f, i) => {
-        const slash = f.path.lastIndexOf("/");
-        const parent = slash < 0 ? dir : `${dir}/${f.path.slice(0, slash)}`;
+      for (const [path, bytes] of files) {
+        const slash = path.lastIndexOf("/");
+        const parent = slash < 0 ? dir : `${dir}/${path.slice(0, slash)}`;
         if (slash >= 0) mkdirp(parent);
-        try { Module.FS.unlink(`${dir}/${f.path}`); } catch { /* 上次没删干净的同名文件 */ }
-        Module.FS.createDataFile(parent, slash < 0 ? f.path : f.path.slice(slash + 1), files[i]!, true, true, true);
-      });
-      const created = new OfflineTts(resolvePackPaths(conf.config, dir, m.files), Module);
+        try { Module.FS.unlink(`${dir}/${path}`); } catch { /* 上次没删干净的同名文件 */ }
+        Module.FS.createDataFile(parent, slash < 0 ? path : path.slice(slash + 1), bytes, true, true, true);
+      }
+      const created = new OfflineTts(resolvePackPaths(conf.config, dir, [...files.keys()]), Module);
       for (const name of conf.unlinkAfterLoad ?? []) { try { Module.FS.unlink(`${dir}/${name}`); } catch { /* ignore */ } }
       if (!created.handle) throw new Error("voice engine creation failed (see [sherpa] console output)");
       tts = created; ec = conf;

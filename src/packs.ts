@@ -64,12 +64,17 @@ export function assembleFiles(m: PackManifest, chunks: readonly Uint8Array[]): U
 }
 
 /**
- * 给引擎配置里的包内文件名补上挂载目录。规则：配置里任何字符串值，按逗号拆开后**每一段都是包里的文件名或目录名**，就整段补目录；别的字符串原样。
+ * 包里压缩存放的文件以 `.gz` 结尾；后端看到的名字去掉这个后缀（worker 运行时负责解开）。
+ */
+export function logicalName(path: string): string { return path.endsWith(".gz") ? path.slice(0, -3) : path; }
+
+/**
+ * 给引擎配置里的包内文件名补上挂载目录。files = 后端看到的文件名（已去 `.gz`）。规则：配置里任何字符串值，按逗号拆开后**每一段都是包里的文件名或目录名**，就整段补目录；别的字符串原样。
  * （所以 "cpu"、"ja" 这种不会被误伤；"a.fst,b.fst" 这种逗号表会逐项补。）返回新对象，不改入参。
  */
-export function resolvePackPaths<T>(config: T, dir: string, files: readonly PackFile[]): T {
+export function resolvePackPaths<T>(config: T, dir: string, files: readonly string[]): T {
   const names = new Set<string>();
-  for (const f of files) { names.add(f.path); const parts = f.path.split("/"); for (let i = 1; i < parts.length; i++) names.add(parts.slice(0, i).join("/")); }
+  for (const path of files) { names.add(path); const parts = path.split("/"); for (let i = 1; i < parts.length; i++) names.add(parts.slice(0, i).join("/")); }
   const walk = (v: unknown): unknown => {
     if (typeof v === "string") {
       if (!v) return v;

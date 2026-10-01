@@ -1,7 +1,7 @@
 // 语音包纯函数 + SHA-256 的规格测试。created 2026-10-01 by Claude Fable 5.1
 import { createHash } from "node:crypto";
 import { describe, it, eq, assert } from "./runner.mjs";
-import { assembleFiles, resolvePackPaths } from "../src/packs.ts";
+import { assembleFiles, resolvePackPaths, logicalName } from "../src/packs.ts";
 import { Sha256, sha256Hex } from "../src/sha256.ts";
 
 /** 造一个小包：三个文件拼起来按 chunkBytes 切。 */
@@ -31,7 +31,8 @@ describe("packs/assembleFiles", () => {
 });
 
 describe("packs/resolvePackPaths", () => {
-  const files = [{ path: "model.onnx" }, { path: "a.fst" }, { path: "b.fst" }, { path: "espeak-ng-data/lang/ja" }].map((f) => ({ ...f, bytes: 1, offset: 0, sha256: "" }));
+  const files = ["model.onnx", "a.fst", "b.fst", "espeak-ng-data/lang/ja"];
+  it("压缩存放的文件：后端看到的名字去掉 .gz", () => { eq(logicalName("ja/sys.dic.gz"), "ja/sys.dic"); eq(logicalName("model.onnx"), "model.onnx"); });
   it("包里的文件名 / 目录名补目录；逗号表逐项补；别的字符串不动；不改入参", () => {
     const cfg = { m: { model: "model.onnx", dataDir: "espeak-ng-data", provider: "cpu", numThreads: 1, lang: "ja", empty: "" }, ruleFsts: "a.fst, b.fst", mixed: "a.fst,nope.fst" };
     const out = resolvePackPaths(cfg, "/packs/x", files);

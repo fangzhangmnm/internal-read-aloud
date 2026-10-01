@@ -7,8 +7,8 @@ export interface BackendLoadContext {
   /** 引擎文件目录的绝对 URL（以 / 结尾）。 */
   engineBase: string;
   manifest: PackManifest;
-  /** 包里的每个文件一块 buffer，顺序同 manifest.files；后端可以拿走所有权。 */
-  files: Uint8Array[];
+  /** 包里的每个文件：名字（压缩存放的已解开、名字去掉 `.gz`）→ 字节；后端可以拿走所有权。 */
+  files: Map<string, Uint8Array>;
 }
 export interface Backend {
   load(ctx: BackendLoadContext): Promise<{ sampleRate: number; voices: number }>;

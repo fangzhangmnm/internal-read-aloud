@@ -22,7 +22,7 @@ const ZH = "TEST-piper-zh-xiao-ya-int8", JA = "TEST-supertonic-3-int8";
 for (const [what, p] of [["engine wasm", ENGINE_WASM], ["engine tts js", ENGINE_TTS_JS], ["test packs", join(PACKS, ZH)], ["esbuild", ESBUILD ?? ""]]) if (!p || !existsSync(p)) { console.error(`[e2e] missing ${what}: ${p}`); process.exit(2); }
 
 await mkdir(join(HERE, ".out"), { recursive: true });
-execFileSync(ESBUILD, [join(LIB, "dist/worker/index.js"), "--bundle", "--format=iife", "--target=es2020", `--outfile=${join(HERE, ".out/worker.js")}`, "--log-level=warning"]);
+execFileSync(ESBUILD, [join(LIB, "dist/worker/sherpa-entry.js"), "--bundle", "--format=iife", "--target=es2020", `--outfile=${join(HERE, ".out/worker.js")}`, "--log-level=warning"]);
 execFileSync(ESBUILD, [join(HERE, "page.js"), "--bundle", "--format=esm", "--target=es2020", `--outfile=${join(HERE, ".out/page.js")}`, "--log-level=warning"]);
 
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".wasm": "application/wasm", ".json": "application/json" };
