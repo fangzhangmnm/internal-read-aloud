@@ -6,7 +6,16 @@ async function embed(base, slug) {
   const bytes = new Uint8Array(await (await fetch(`${base}/packs/${slug}/manifest.json`, { cache: "no-store" })).arrayBuffer());
   return { packId: await hex(bytes), manifest: JSON.parse(new TextDecoder().decode(bytes)) };
 }
+// 喇叭探针：数「同时在响的声源」有几个（任何时刻不许超过 1）
+const live = { now: 0, max: 0 };
+{
+  const S = AudioBufferSourceNode.prototype, start0 = S.start, stop0 = S.stop;
+  const off = (n) => { if (n.__live) { n.__live = false; live.now--; } };
+  S.start = function (...a) { if (!this.__live) { this.__live = true; live.now++; live.max = Math.max(live.max, live.now); this.addEventListener("ended", () => off(this)); } return start0.apply(this, a); };
+  S.stop = function (...a) { off(this); return stop0.apply(this, a); };
+}
 window.e2e = {
+  live,
   splitSentences,
   /** 建引擎：音色定义和清单从测试服务器取来当「内嵌」（产品里是 build 时内嵌）。list = [{ def 或 defUrl, base }]。 */
   async make(list, cacheName) {

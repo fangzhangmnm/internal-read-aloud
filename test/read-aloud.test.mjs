@@ -15,7 +15,7 @@ function rig(opts = {}) {
   const sink = {
     play(clip) {
       let settle; const done = new Promise((r) => { settle = r; });
-      const pb = { clip, paused: false, stopped: false, finish: () => settle(true) };
+      const pb = { clip, paused: false, stopped: false, finished: false, finish: () => { pb.finished = true; settle(true); } };
       playbacks.push(pb); log.push(`play:${clip.text}`);
       return { done, stop() { pb.stopped = true; log.push(`stop:${clip.text}`); settle(false); }, pause() { pb.paused = true; }, resume() { pb.paused = false; } };
     },
@@ -111,6 +111,21 @@ describe("createReadAloud", () => {
     eq(r.ra.state(), "idle", "skip while stopped reads one sentence only");
     r.ra.skip(-1); r.ra.skip(-1); r.ra.skip(-1); await r.settle();
     eq(r.ra.current().index, 0, "clamped at first sentence");
+  });
+  it("新点的优先：已经合成好的句子连点（同步起播的路径），任何时刻只有一段在响", async () => {
+    // 2026-10-01 真机：user 听到「unison」——被打断的那一轮收尾时把「现在谁在响」清空了，下一次打断就停不到正在响的那一段，两段叠在一起。
+    const live = (r) => r.playbacks.filter((p) => !p.stopped && !p.finished).length;
+    const r = rig();
+    r.ra.start(TEXT, 0, { once: true }); await r.synthAll();
+    eq(live(r), 1);
+    for (let k = 0; k < 4; k++) { r.ra.start(TEXT, 0, { once: true }); await r.settle(); eq(live(r), 1, `after tap ${k + 2}`); }
+    eq(r.playbacks.length, 5); eq(r.log.filter((x) => x.startsWith("synth:")).length, 1, "same sentence is synthesised once");
+    // 连续模式：念着第 1 句（后两句已提前合成好）时来回跳
+    const r2 = rig();
+    r2.ra.start(TEXT, 0); await r2.synthAll();
+    for (const off of [3, 0, 3, 6, 0]) { r2.ra.start(TEXT, off); await r2.settle(); await r2.synthAll(); eq(live(r2), 1, `jump to ${off}`); }
+    r2.ra.stop(); await r2.settle();
+    eq(live(r2), 0, "stop silences everything");
   });
   it("合成出错：发 error、回 idle、不再往下读", async () => {
     const r = rig();

@@ -2,6 +2,7 @@
 //
 // iOS / Safari 的规矩：AudioContext 必须在用户手势里创建或恢复。合成是异步的，等声音算好再建就晚了——
 // 所以宿主要在点击处理函数里**同步**调一次 unlock()，之后 play 随时可以。
+// **任何时刻只有一段在响**：play 进来先停上一段（控制器也守着同一条，这里是第二层）。
 // 这是「亮屏朗读」的喇叭：屏幕锁了、页面进后台，浏览器会把 AudioContext 挂起（锁屏连读不在这一版的承诺里）。
 import type { AudioSink, Clip, Playback } from "./read-aloud.ts";
 
@@ -14,6 +15,7 @@ export interface WebAudioSink extends AudioSink {
 
 export function createWebAudioSink(): WebAudioSink {
   let ctx: AudioContext | null = null;
+  let current: Playback | null = null;   // 正在响的那一段：喇叭自己保证任何时刻只有一段（上层再怎么出错也叠不起来）
   const ensure = (): AudioContext => {
     if (!ctx || ctx.state === "closed") {
       const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -23,8 +25,9 @@ export function createWebAudioSink(): WebAudioSink {
   };
   return {
     unlock() { const c = ensure(); if (c.state === "suspended") void c.resume().catch(() => { /* 不在手势里：下次手势再试 */ }); },
-    close() { const c = ctx; ctx = null; if (c && c.state !== "closed") void c.close().catch(() => { /* ignore */ }); },
+    close() { if (current) { const prev = current; current = null; prev.stop(); } const c = ctx; ctx = null; if (c && c.state !== "closed") void c.close().catch(() => { /* ignore */ }); },
     play(clip: Clip): Playback {
+      if (current) { const prev = current; current = null; prev.stop(); }   // 新的一段进来：先掐掉上一段（新点的优先）
       const c = ensure();
       const buf = c.createBuffer(1, clip.samples.length, clip.sampleRate);
       buf.copyToChannel(clip.samples as Float32Array<ArrayBuffer>, 0);
@@ -33,15 +36,17 @@ export function createWebAudioSink(): WebAudioSink {
       let settle: (ok: boolean) => void = () => {};
       let settled = false;
       const done = new Promise<boolean>((r) => { settle = (ok) => { if (!settled) { settled = true; r(ok); } }; });
-      src.onended = () => settle(true);
-      if (c.state === "suspended") void c.resume().catch(() => { /* ignore */ });
-      src.start();
-      return {
+      const pb: Playback = {
         done,
-        stop() { settle(false); try { src.onended = null; src.stop(); } catch { /* 已经停了 */ } },
+        stop() { if (current === pb) current = null; settle(false); try { src.onended = null; src.stop(); src.disconnect(); } catch { /* 已经停了 */ } },
         pause() { void c.suspend().catch(() => { /* ignore */ }); },
         resume() { void c.resume().catch(() => { /* ignore */ }); },
       };
+      src.onended = () => { if (current === pb) current = null; settle(true); };
+      if (c.state === "suspended") void c.resume().catch(() => { /* ignore */ });
+      src.start();
+      current = pb;
+      return pb;
     },
   };
 }
