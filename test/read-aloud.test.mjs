@@ -36,14 +36,14 @@ function rig(opts = {}) {
 const TEXT = "甲。乙。\n丙。丁。";   // 四句；乙 → 丙 跨段
 
 describe("createReadAloud", () => {
-  it("连读：一句接一句，读完发 end；句间停顿同段 350 / 跨段 700", async () => {
+  it("连读：一句接一句，读完发 end；句间停顿同段 600 / 跨段 900", async () => {
     const r = rig();
     r.ra.start(TEXT, 0);
     eq(r.ra.state(), "loading");
     for (let i = 0; i < 4; i++) { await r.synthAll(); eq(r.ra.state(), "playing", `sentence ${i}`); await r.finishPlay(); }
     eq(r.ra.state(), "idle");
     eq(r.log.filter((x) => x.startsWith("play:")).join(","), "play:甲。,play:乙。,play:丙。,play:丁。");
-    eq(JSON.stringify(r.sleeps), JSON.stringify([350, 700, 350]));
+    eq(JSON.stringify(r.sleeps), JSON.stringify([600, 900, 600]));
     eq(r.events[r.events.length - 1], "end");
     eq(r.events.filter((e) => e.startsWith("sentence:")).join(","), "sentence:0,sentence:1,sentence:2,sentence:3");
   });

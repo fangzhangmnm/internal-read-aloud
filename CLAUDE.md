@@ -13,7 +13,7 @@
 - **引擎二进制由宿主 vendor、用 URL 注入**（`engineBase`），不进本库的包。语音包清单由宿主内嵌（信任根 = packId）、字节走家族模型仓协议（`../20260903 PWA Models/README.md`）。
 - **联网只有一处**：`src/worker/index.ts` 下载语音包分片（只读 GET，逐片 sha256，对不上整包拒收）。Cache Storage 也只在这一个文件（缓存名宿主给，默认家族共享的 `pwa-models`）。**永不碰 localStorage / IndexedDB；永不用系统或云端的语音服务**（`speechSynthesis` 也不许：桌面浏览器会把文字发到服务器）。`test/redline-guard.test.mjs` 机械执法，别绕。
 - **后端可换**：`src/worker/backend.ts` 是一种引擎一个后端的形状。现有 `sherpa.ts`（家族已 vendor 的 sherpa-onnx WASM，TTS 已编入）。**user 2026-10-01 定：先用つくよみちゃん（piper-plus 引擎）兜底所有语言，别的音色以后慢慢加**——piper-plus 后端还没写，等浏览器路径和电脑参考实现对齐（排查现场 `~/jupyter/third-party/piper-plus/`）。
-- **句间停顿归控制器**（同段 350 ms、跨段 700 ms，可配）：合成出来的一句首尾几乎没有静音，不留气口听着就是「不喘气」。
+- **句间停顿归控制器**（同段 600 ms、跨段 900 ms，可配；600 = piper-plus 参考实现的句间静音。句内逗号处的停顿归后端）：合成出来的一句首尾几乎没有静音，不留气口听着就是「不喘气」。
 - **两处逐字拷贝，记账**：`src/sha256.ts` 和 worker 里「下载 / 校验 / 缓存」那一半来自 WebXiaoHeiWu `src/asr/`。WXHW 的识别这轮不动；等本库稳定后让它改吃本库，两份才合一。改算法 = 两边一起改。
 - **版本纪律同其他内部库**：开发期 `0.0.0`；版本号只在 user 过目真实导出面（`api/read-aloud.api.md`）之后才写；收货脚本只认打过 tag 的已发版；**发 0.1.0 之前必须 user 批**。
 - **开发期往宿主里装包只许用 `scripts/dev-install.sh`**（逐字节验货，拒绝往宿主的 main 上装）。

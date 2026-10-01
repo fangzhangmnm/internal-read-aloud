@@ -7,6 +7,7 @@
 //   · start(text, from)：从 from 落在的那一句开始。once = 只读这一句就停；否则一路读到文本结束 → 发 "end"（宿主决定翻章还是停）。
 //   · 合成比播放慢的时候会等（state = "loading"）；比播放快的时候提前合成 lookahead 句，句与句之间只隔规定的停顿。
 //   · 句间停顿由这里定（合成出来的一句首尾几乎没有静音，不留气口听着就是「不喘气」）：同一段里 sentenceGapMs，跨段 paragraphGapMs。
+//     默认 600 / 900 毫秒：600 = piper-plus 参考实现的句间静音（user 2026-10-01 听参考实现的长段说节奏没问题）。句内逗号处的停顿归后端。
 //   · 任何时候 stop / 再 start / skip：旧的一轮立刻作废（代号 gen），它还没回来的合成结果回来也不播。
 import { splitSentences, sentenceAt, detectLang, type SentenceSpan, type SpeechLang } from "./sentences.ts";
 
@@ -26,9 +27,9 @@ export interface ReadAloudDeps {
   sink: AudioSink;
   /** 提前合成几句（默认 2）。合成引擎一次只算一句，排太多是白算（用户一跳就全作废）。 */
   lookahead?: number;
-  /** 同一段里两句之间的停顿，毫秒（默认 350）。 */
+  /** 同一段里两句之间的停顿，毫秒（默认 600）。 */
   sentenceGapMs?: number;
-  /** 跨段（两句之间隔着换行）的停顿，毫秒（默认 700）。 */
+  /** 跨段（两句之间隔着换行）的停顿，毫秒（默认 900）。 */
   paragraphGapMs?: number;
   /** 等停顿用的计时器；测试注入假的。 */
   sleep?: (ms: number) => Promise<void>;
@@ -59,7 +60,7 @@ export interface ReadAloud {
 
 export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
   const lookahead = Math.max(0, deps.lookahead ?? 2);
-  const gapS = deps.sentenceGapMs ?? 350, gapP = deps.paragraphGapMs ?? 700;
+  const gapS = deps.sentenceGapMs ?? 600, gapP = deps.paragraphGapMs ?? 900;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const listeners: { [K in keyof ReadAloudEvents]: Set<ReadAloudEvents[K]> } = { sentence: new Set(), state: new Set(), end: new Set(), error: new Set() };
   const emit = <K extends keyof ReadAloudEvents>(ev: K, ...args: Parameters<ReadAloudEvents[K]>) => { for (const cb of [...listeners[ev]]) (cb as (...a: unknown[]) => void)(...args); };

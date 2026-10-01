@@ -124,9 +124,9 @@ export declare interface ReadAloudDeps {
     sink: AudioSink;
     /** 提前合成几句（默认 2）。合成引擎一次只算一句，排太多是白算（用户一跳就全作废）。 */
     lookahead?: number;
-    /** 同一段里两句之间的停顿，毫秒（默认 350）。 */
+    /** 同一段里两句之间的停顿，毫秒（默认 600）。 */
     sentenceGapMs?: number;
-    /** 跨段（两句之间隔着换行）的停顿，毫秒（默认 700）。 */
+    /** 跨段（两句之间隔着换行）的停顿，毫秒（默认 900）。 */
     paragraphGapMs?: number;
     /** 等停顿用的计时器；测试注入假的。 */
     sleep?: (ms: number) => Promise<void>;
