@@ -1,0 +1,8 @@
+journal/
+journals/
+.claude/
+node_modules/
+dist/
+*.tgz
+
+test/e2e/.out/

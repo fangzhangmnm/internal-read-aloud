@@ -1,0 +1,131 @@
+// 连读控制器的规格测试：假引擎（合成 = 记一笔，手动放行）+ 假喇叭（播完 = 手动放行）。created 2026-10-01 by Claude Fable 5.1
+import { describe, it, eq, assert, tick } from "./runner.mjs";
+import { createReadAloud } from "../src/read-aloud.ts";
+
+function rig(opts = {}) {
+  const log = [];
+  const pendingSynth = [];   // { text, resolve, reject }
+  const playbacks = [];      // { clip, finish(ok), paused }
+  const engine = {
+    synth(text, o) {
+      log.push(`synth:${text}`);
+      return new Promise((resolve, reject) => pendingSynth.push({ text, o, resolve: () => resolve({ samples: new Float32Array(1), sampleRate: 1, text }), reject }));
+    },
+  };
+  const sink = {
+    play(clip) {
+      let settle; const done = new Promise((r) => { settle = r; });
+      const pb = { clip, paused: false, stopped: false, finish: () => settle(true) };
+      playbacks.push(pb); log.push(`play:${clip.text}`);
+      return { done, stop() { pb.stopped = true; log.push(`stop:${clip.text}`); settle(false); }, pause() { pb.paused = true; }, resume() { pb.paused = false; } };
+    },
+  };
+  const sleeps = [];
+  const ra = createReadAloud({ engine, sink, sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); }, ...opts });
+  const events = [];
+  ra.on("sentence", (span, i) => events.push(`sentence:${i}`));
+  ra.on("state", (s) => events.push(`state:${s}`));
+  ra.on("end", () => events.push("end"));
+  ra.on("error", (e) => events.push(`error:${e.message}`));
+  const settle = async () => { for (let i = 0; i < 6; i++) await tick(); };
+  /** 放行所有排着的合成。 */
+  const synthAll = async () => { while (pendingSynth.length) pendingSynth.shift().resolve(); await settle(); };
+  const finishPlay = async () => { playbacks[playbacks.length - 1].finish(); await settle(); };
+  return { ra, log, events, pendingSynth, playbacks, sleeps, settle, synthAll, finishPlay };
+}
+const TEXT = "甲。乙。\n丙。丁。";   // 四句；乙 → 丙 跨段
+
+describe("createReadAloud", () => {
+  it("连读：一句接一句，读完发 end；句间停顿同段 350 / 跨段 700", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0);
+    eq(r.ra.state(), "loading");
+    for (let i = 0; i < 4; i++) { await r.synthAll(); eq(r.ra.state(), "playing", `sentence ${i}`); await r.finishPlay(); }
+    eq(r.ra.state(), "idle");
+    eq(r.log.filter((x) => x.startsWith("play:")).join(","), "play:甲。,play:乙。,play:丙。,play:丁。");
+    eq(JSON.stringify(r.sleeps), JSON.stringify([350, 700, 350]));
+    eq(r.events[r.events.length - 1], "end");
+    eq(r.events.filter((e) => e.startsWith("sentence:")).join(","), "sentence:0,sentence:1,sentence:2,sentence:3");
+  });
+  it("提前合成 lookahead 句：读第 1 句时第 2、3 句已经在算，不多算", async () => {
+    const r = rig({ lookahead: 2 });
+    r.ra.start(TEXT, 0);
+    await r.settle();
+    eq(r.log.filter((x) => x.startsWith("synth:")).join(","), "synth:甲。,synth:乙。,synth:丙。");
+  });
+  it("once：只读点到的那一句，不提前合成别的，读完回 idle 且不发 end", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 3, { once: true });   // 偏移 3 落在「乙。」
+    await r.synthAll();
+    eq(r.log.join(","), "synth:乙。,play:乙。");
+    await r.finishPlay();
+    eq(r.ra.state(), "idle");
+    assert(!r.events.includes("end"), "once must not emit end");
+    eq(r.ra.current().index, 1);
+  });
+  it("stop：正在播的立刻停；还没回来的合成回来也不播", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0);
+    await r.synthAll();
+    r.ra.stop();
+    eq(r.ra.state(), "idle");
+    assert(r.playbacks[0].stopped, "playback stopped");
+    await r.settle();
+    eq(r.log.filter((x) => x.startsWith("play:")).length, 1, "nothing else played");
+  });
+  it("重新 start（点了别的句子）：旧的一轮作废，从新句子读", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0);
+    r.ra.start(TEXT, 6, { once: true });   // 「丙。」；第一轮的合成还没回来
+    await r.synthAll();
+    eq(r.log.filter((x) => x.startsWith("play:")).join(","), "play:丙。");
+  });
+  it("同一段文本再 start：已经合成过的句子不重算；换了语速就重算", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0, { once: true }); await r.synthAll(); await r.finishPlay();
+    r.events.length = 0;
+    r.ra.start(TEXT, 0, { once: true }); await r.settle();
+    eq(r.log.filter((x) => x === "synth:甲。").length, 1, "cached");
+    assert(!r.events.includes("state:loading"), "already-synthesized sentence must not flash loading: " + r.events.join(","));
+    await r.finishPlay();
+    r.ra.start(TEXT, 0, { once: true, speed: 0.8 }); await r.settle();
+    eq(r.log.filter((x) => x === "synth:甲。").length, 2, "speed change invalidates");
+  });
+  it("pause / resume 只动喇叭，状态跟着变", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0); await r.synthAll();
+    r.ra.pause(); eq(r.ra.state(), "paused"); assert(r.playbacks[0].paused);
+    r.ra.resume(); eq(r.ra.state(), "playing"); assert(!r.playbacks[0].paused);
+  });
+  it("skip：连读中跳到下一句接着连读；停着的时候跳 = 只读那一句", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0); await r.synthAll();
+    r.ra.skip(1); await r.synthAll();
+    eq(r.ra.current().index, 1); eq(r.ra.state(), "playing");
+    await r.finishPlay(); await r.synthAll();
+    eq(r.ra.current().index, 2, "still continuous after skip");
+    r.ra.stop();
+    r.ra.skip(-1); await r.synthAll();
+    eq(r.ra.current().index, 1);
+    await r.finishPlay();
+    eq(r.ra.state(), "idle", "skip while stopped reads one sentence only");
+    r.ra.skip(-1); r.ra.skip(-1); r.ra.skip(-1); await r.settle();
+    eq(r.ra.current().index, 0, "clamped at first sentence");
+  });
+  it("合成出错：发 error、回 idle、不再往下读", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0);
+    r.pendingSynth.shift().reject(new Error("boom")); await r.settle();
+    eq(r.ra.state(), "idle");
+    assert(r.events.includes("error:boom"), r.events.join(","));
+    eq(r.log.filter((x) => x.startsWith("play:")).length, 0);
+  });
+  it("没有能读的句子：连读直接发 end；语言没给就按文本猜", async () => {
+    const r = rig();
+    r.ra.start(" \n——\n", 0); await r.settle();
+    eq(r.events.join(","), "end");
+    const r2 = rig();
+    r2.ra.start("森の中で。", 0, { once: true }); await r2.settle();
+    eq(r2.pendingSynth[0].o.lang, "ja");
+  });
+});

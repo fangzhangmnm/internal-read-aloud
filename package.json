@@ -1,0 +1,23 @@
+{
+  "name": "@internal/read-aloud",
+  "version": "0.0.0",
+  "description": "PWA 家族逐句朗读（TTS）：纯函数分句 + 连读控制器 + 懒加载的本机合成引擎门面。界面、持久化、图标、文案全归宿主；引擎二进制与语音包清单由宿主注入。",
+  "type": "module",
+  "license": "MIT",
+  "files": ["dist", "src", "README.md"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./worker": { "types": "./dist/worker/index.d.ts", "default": "./dist/worker/index.js" }
+  },
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "test": "node test/run.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "release": "bash scripts/release.sh",
+    "e2e": "bash scripts/build.sh && node test/e2e/run.mjs"
+  },
+  "devDependencies": {
+    "@microsoft/api-extractor": "^7.58.12",
+    "typescript": "5.7.3"
+  }
+}
