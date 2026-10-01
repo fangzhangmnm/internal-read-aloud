@@ -8,6 +8,7 @@
 //   · 合成比播放慢的时候会等（state = "loading"）；比播放快的时候提前合成 lookahead 句，句与句之间只隔规定的停顿。
 //   · 句间停顿由这里定（合成出来的一句首尾几乎没有静音，不留气口听着就是「不喘气」）：同一段里 sentenceGapMs，跨段 paragraphGapMs。
 //     默认 600 / 900 毫秒：600 = piper-plus 参考实现的句间静音（user 2026-10-01 听参考实现的长段说节奏没问题）。句内逗号处的停顿归后端。
+//     停顿除以语速倍数（user 2026-10-01「加速加1.5档，然后中间的空也应该等比例加」）。
 //   · 任何时候 stop / 再 start / skip：旧的一轮立刻作废（代号 gen），它还没回来的合成结果回来也不播。
 //   · **新点的优先，任何时刻只有一段在响**：再 start / skip / stop 先掐掉正在响的那一段，再起新的。
 import { splitSentences, sentenceAt, detectLang, type SentenceSpan, type SpeechLang } from "./sentences.ts";
@@ -29,7 +30,7 @@ export interface ReadAloudDeps {
   sink: AudioSink;
   /** 提前合成几句（默认 2）。合成引擎一次只算一句，排太多是白算（用户一跳就全作废）。 */
   lookahead?: number;
-  /** 同一段里两句之间的停顿，毫秒（默认 600）。 */
+  /** 同一段里两句之间的停顿，毫秒（默认 600；实际停顿 = 它 ÷ 语速倍数）。 */
   sentenceGapMs?: number;
   /** 跨段（两句之间隔着换行）的停顿，毫秒（默认 900）。 */
   paragraphGapMs?: number;
@@ -73,6 +74,8 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
   let clips = new Map<number, Promise<Clip>>();
   let ready = new Map<number, Clip>();   // 已经算好的（同步可查）：点到算好的句子不闪「加载中」
 
+  /** 语速倍数：句间停顿跟着它等比例缩放（念得快，气口也短）。 */
+  const pace = () => { const v = opts.speed; return typeof v === "number" && v > 0 ? v : 1; };
   const setState = (s: ReadAloudState) => { if (st !== s) { st = s; emit("state", s); } };
   function clipFor(i: number): Promise<Clip> {
     let p = clips.get(i);
@@ -114,7 +117,7 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
         if (playing === pb) playing = null;   // 只清自己那一段：被打断时新的一轮可能已经起播（句子已合成好 = 同步起播），不许把它的记录清掉
         if (my !== gen || !finished) return;
         if (!continuous) { setState("idle"); return; }
-        if (i + 1 < spans.length) { await sleep(crossesParagraph(i, i + 1) ? gapP : gapS); if (my !== gen) return; }
+        if (i + 1 < spans.length) { await sleep((crossesParagraph(i, i + 1) ? gapP : gapS) / pace()); if (my !== gen) return; }
       }
       if (my !== gen) return;
       setState("idle");

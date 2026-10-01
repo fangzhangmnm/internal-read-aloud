@@ -127,6 +127,16 @@ describe("createReadAloud", () => {
     r2.ra.stop(); await r2.settle();
     eq(live(r2), 0, "stop silences everything");
   });
+  it("句间停顿跟着语速等比例缩：1.5 倍速 → 400 / 600 / 400", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0, { speed: 1.5 });
+    for (let i = 0; i < 4; i++) { await r.synthAll(); await r.finishPlay(); }
+    eq(JSON.stringify(r.sleeps), JSON.stringify([400, 600, 400]));
+    const r2 = rig();
+    r2.ra.start(TEXT, 0, { speed: 0.8 });
+    for (let i = 0; i < 4; i++) { await r2.synthAll(); await r2.finishPlay(); }
+    eq(JSON.stringify(r2.sleeps), JSON.stringify([750, 1125, 750]));
+  });
   it("合成出错：发 error、回 idle、不再往下读", async () => {
     const r = rig();
     r.ra.start(TEXT, 0);

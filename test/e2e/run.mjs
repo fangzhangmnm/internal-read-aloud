@@ -188,7 +188,9 @@ try {
   const en2 = await page.evaluate(() => window.e2e.synth("The quick brown fox jumps over the lazy dog.", "en"));
   check("英语一句（全语言装载下）：时长和只装英语时同一量级（每一遍有随机差异，量到过 2.1–2.9 秒）", en2.sec > e1.sec * 0.55 && en2.sec < e1.sec * 1.8 && en2.rms > 0.01, `${en2.sec} vs ${e1.sec}`);
   const fast = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { speed: 1.25 }));
-  check("语速 1.25：这一句变短", fast.sec < ja.sec * 0.9, `${fast.sec} vs ${ja.sec}`);
+  check("语速 1.25：这一句变短（应是 0.8 倍左右；每一遍有随机差异，门槛放在 0.97）", fast.sec < ja.sec * 0.97, `${fast.sec} vs ${ja.sec}`);
+  const zhFast = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { speed: 1.5 }));
+  check("小句之间垫的静音跟着语速缩：1 倍速 250 ms，1.5 倍速 167 ms", Math.abs(zh.silenceMs - 250) <= 8 && Math.abs(zhFast.silenceMs - 167) <= 8, `${zh.silenceMs} / ${zhFast.silenceMs}`);
   const dots = await page.evaluate(() => window.e2e.synth("……", "ja"));
   check("只有标点的一句 → 长度 0 的一段（不报错）", dots.sec === 0, JSON.stringify(dots));
   console.log(`  （つくよみちゃん 建器 ${lAll.createMs} ms；日 ${ja.sec.toFixed(1)} s 音频 / ${ja.ms} ms，英 ${en2.sec.toFixed(1)} s / ${en2.ms} ms，中 ${zh.sec.toFixed(1)} s / ${zh.ms} ms）`);

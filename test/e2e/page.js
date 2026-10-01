@@ -45,7 +45,9 @@ window.e2e = {
     const c = await window.e2e.engine.synth(text, { lang, speaker: o.speaker ?? 0, speed: o.speed });
     let sum = 0; for (let i = 0; i < c.samples.length; i++) sum += c.samples[i] * c.samples[i];
     if (o.keep) (window.e2e.kept ??= {})[o.keep] = c;
-    return { ms: Math.round(performance.now() - t0), sec: c.samples.length / c.sampleRate, sampleRate: c.sampleRate, rms: Math.sqrt(sum / Math.max(1, c.samples.length)) };
+    // 这一段里最长的一截「完全静音」（后端在小句之间垫的静音是精确的 0）
+    let run = 0, longest = 0; for (let i = 0; i < c.samples.length; i++) { if (c.samples[i] === 0) { if (++run > longest) longest = run; } else run = 0; }
+    return { ms: Math.round(performance.now() - t0), sec: c.samples.length / c.sampleRate, sampleRate: c.sampleRate, rms: Math.sqrt(sum / Math.max(1, c.samples.length)), silenceMs: Math.round((longest / c.sampleRate) * 1000) };
   },
   /** 留着的一段 → 16 位 PCM 的 base64（node 那头写成 wav）。 */
   pcm16(name) {

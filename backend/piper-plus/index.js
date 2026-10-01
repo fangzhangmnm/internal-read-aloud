@@ -132,7 +132,7 @@ export function createPiperPlusBackend() {
         if (ids.length <= 3) continue;   // BOS, pad, EOS only: nothing pronounceable (punctuation, unknown symbols)
         const r = await state.vits.synthIds(ids, pros, lang, scales);
         clips.push(r.samples);
-        gaps.push(Math.round((pauseMs / 1000) * sr));
+        gaps.push(Math.round((pauseMs / speed / 1000) * sr));   // pauses scale with the speaking rate, like everything else
         if (o.__debug) debug.push({ text: piece, ...r.inputs });
       }
       const total = clips.reduce((a, c) => a + c.length, 0) + gaps.slice(0, -1).reduce((a, g) => a + g, 0);
