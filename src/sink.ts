@@ -13,6 +13,9 @@ export interface WebAudioSink extends AudioSink {
   close(): void;
 }
 
+/** 「该播完了」之后再等这么久还没收到 ended 通知，就自己收场（秒）。 */
+const END_SLACK_S = 0.4;
+
 export function createWebAudioSink(): WebAudioSink {
   let ctx: AudioContext | null = null;
   let current: Playback | null = null;   // 正在响的那一段：喇叭自己保证任何时刻只有一段（上层再怎么出错也叠不起来）
@@ -42,10 +45,22 @@ export function createWebAudioSink(): WebAudioSink {
         pause() { void c.suspend().catch(() => { /* ignore */ }); },
         resume() { void c.resume().catch(() => { /* ignore */ }); },
       };
-      src.onended = () => { if (current === pb) current = null; settle(true); };
+      const finish = () => { if (current === pb) current = null; settle(true); };
+      src.onended = finish;
       if (c.state === "suspended") void c.resume().catch(() => { /* ignore */ });
       src.start();
       current = pb;
+      // 保险：等不到 ended 也要收场。2026-10-01 在无头 Chromium 里见过——声卡时钟在一段刚播完的那一刻停住不走了（状态仍是 running），
+      // 浏览器就一直不发 ended，朗读卡在这一句上。所以按墙上的钟自己数：只在声卡处于 running 时累计（暂停 / 还没解锁不算），
+      // 累计过了「这段的长度 + 余量」还没等到通知，就当它播完。正常情况下 ended 先到，这里什么都不做。
+      let ran = 0, last = performance.now();
+      const watch = setInterval(() => {
+        const now = performance.now();
+        if (settled) { clearInterval(watch); return; }
+        if (c.state === "running") ran += now - last;
+        last = now;
+        if (c.state === "closed" || ran >= (buf.duration + END_SLACK_S) * 1000) { clearInterval(watch); finish(); }
+      }, 100);
       return pb;
     },
   };

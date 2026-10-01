@@ -103,6 +103,14 @@ export function splitClausesDetailed(sentence, minChars = 20) {
 /** The pieces only. @param {string} sentence @param {number} [minChars] @returns {string[]} */
 export function splitClauses(sentence, minChars = 20) { return splitClausesDetailed(sentence, minChars).map((p) => p.text); }
 
+// ---- machine markup ---------------------------------------------------------------------------------------------------
+/**
+ * Drop markup tokens that are not meant to be read: `<s>` `</s>` `<|e1v3|>` `<br>` … (model-output control tokens, bare HTML-ish tags).
+ * Without this the Chinese path reads the digits inside them (`<|e1v3|>` -> “一 三”).
+ * @param {string} text
+ */
+export function stripMarkup(text) { return text.replace(/<\|[^|<>\n]{0,40}\|>|<\/?[a-zA-Z][a-zA-Z0-9]{0,15}>/g, ""); }
+
 // ---- Chinese: Arabic numerals -> hanzi -------------------------------------------------------------------------------
 // The reference Chinese G2P (and the Rust WASM) silently DROPS digits: "2026年10月1日" would be read as "年月日".
 // This pre-pass writes them out so they are spoken. Deliberately simple: integers, decimals, percent, and digit-by-digit

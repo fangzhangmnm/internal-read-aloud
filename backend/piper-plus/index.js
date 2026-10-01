@@ -21,7 +21,7 @@ import { createEnglishG2p } from "./en-g2p.js";
 import { createChineseG2p } from "./zh-g2p.js";
 import { encodeTokens, segmentText } from "./encode.js";
 import { createVits } from "./vits.js";
-import { splitClausesDetailed, normalizeZhNumbers } from "./text.js";
+import { splitClausesDetailed, normalizeZhNumbers, stripMarkup } from "./text.js";
 
 /** Names the backend looks up in `ctx.files`. A language is offered only when ALL of its files are present. */
 const FILES = Object.freeze({
@@ -123,7 +123,7 @@ export function createPiperPlusBackend() {
       if (o.voice !== undefined && o.voice !== 0) throw new RangeError(`piper-plus backend: voice ${o.voice} does not exist (this model has one voice, index 0)`);
       const speed = Math.min(4, Math.max(0.25, Number.isFinite(o.speed) && o.speed > 0 ? o.speed : 1));
       const scales = { ...SCALES, lengthScale: SCALES.lengthScale / speed };
-      const sr = state.vits.sampleRate, str = String(text ?? "");
+      const sr = state.vits.sampleRate, str = stripMarkup(String(text ?? ""));
       const pieces = lang === "ja" ? [{ text: str, pauseMs: 0 }] : splitClausesDetailed(str, MIN_CLAUSE_CHARS[lang] ?? 20);
       const clips = [], gaps = [], debug = [];   // gaps[i] = silence (samples) after clip i
       for (const { text: piece, pauseMs } of pieces) {

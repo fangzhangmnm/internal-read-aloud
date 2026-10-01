@@ -11,7 +11,7 @@ const live = { now: 0, max: 0 };
 {
   const S = AudioBufferSourceNode.prototype, start0 = S.start, stop0 = S.stop;
   const off = (n) => { if (n.__live) { n.__live = false; live.now--; } };
-  S.start = function (...a) { if (!this.__live) { this.__live = true; live.now++; live.max = Math.max(live.max, live.now); this.addEventListener("ended", () => off(this)); } return start0.apply(this, a); };
+  S.start = function (...a) { if (!this.__live) { this.__live = true; live.now++; live.max = Math.max(live.max, live.now); this.addEventListener("ended", () => { live.ended = (live.ended ?? 0) + 1; off(this); }); } return start0.apply(this, a); };
   S.stop = function (...a) { off(this); return stop0.apply(this, a); };
 }
 window.e2e = {

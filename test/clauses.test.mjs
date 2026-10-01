@@ -3,7 +3,7 @@
 // 规则是一张表（backend/piper-plus/text.js 头注释）：两段能念的字之间的那一串标点算一簇，按簇里有哪几类符号定停顿。
 // user 2026-10-01 真机三条：「“可是船上有奶牛呀！”苏一边跑一边说，这里没有好好断句」「these--first, --没断句」「逗号上引号的断句呢，有没有系统的解决枚举办法」
 import { describe, it, eq } from "./runner.mjs";
-import { splitClauses, splitClausesDetailed, PAUSE_MS } from "../backend/piper-plus/text.js";
+import { splitClauses, splitClausesDetailed, PAUSE_MS, stripMarkup } from "../backend/piper-plus/text.js";
 
 /** 画成一行好对：`小句⟨停顿类型⟩ | 小句⟨…⟩` */
 const show = (t, n) => splitClausesDetailed(t, n).map((p) => `${p.text}⟨${p.kind}⟩`).join(" | ");
@@ -53,5 +53,11 @@ describe("backend/piper-plus 句内断句（标点簇查表）", () => {
     eq(JSON.stringify(PAUSE_MS), JSON.stringify({ strong: 400, dash: 350, intro: 350, weak: 250 }));
     eq(splitClausesDetailed("她问：“你去哪儿？”然后笑了，转身走开。", 5).map((p) => p.pauseMs).join(), "350,400,250,0");
     eq(JSON.stringify(splitClauses("今天天气很好，我们去公园散步吧。", 5)), JSON.stringify(["今天天气很好，", "我们去公园散步吧。"]));
+  });
+  it("user 2026-10-01 的长例子：引出语、三连感叹、引号后接着说，各就各位；开头的机器记号不念", () => {
+    const line = "<s><|e1v3|>一个信使满头大汗，一边跑一边大喊：“好消息！坏消息！快来看啊！”他在人群中转圈乱跑，大声喊着：“拿撒勒人耶稣被抓了！拿撒勒人耶稣被抓了！”";
+    eq(stripMarkup(line).startsWith("一个信使"), true);
+    eq(show(stripMarkup(line), 5), "一个信使满头大汗，⟨weak⟩ | 一边跑一边大喊：⟨intro⟩ | “好消息！⟨strong⟩ | 坏消息！⟨strong⟩ | 快来看啊！”⟨strong⟩ | 他在人群中转圈乱跑，⟨weak⟩ | 大声喊着：⟨intro⟩ | “拿撒勒人耶稣被抓了！⟨strong⟩ | 拿撒勒人耶稣被抓了！”⟨end⟩");
+    eq(stripMarkup("a</s> <br>b <|endoftext|> 3 < 5 > 2"), "a b  3 < 5 > 2");
   });
 });

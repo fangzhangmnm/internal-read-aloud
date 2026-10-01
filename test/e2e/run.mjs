@@ -127,6 +127,19 @@ try {
   });
   check("喇叭这一层：连着播三段 → 前两段被掐掉（done = false），只有最后一段在响", overlapSink.max === 1 && overlapSink.mid === 1 && overlapSink.now === 0 && overlapSink.first.every((x) => x === false), JSON.stringify(overlapSink));
 
+  const stress = await page.evaluate(async () => {
+    // 连着播 60 段 0.25 秒的声音，每段等它播完：没有一段卡住（浏览器不发 ended 时由喇叭自己的时钟判定收场）
+    const L = window.e2e.live; const before = L.ended ?? 0; const t0 = performance.now(); let ok = 0, slowest = 0;
+    for (let k = 0; k < 60; k++) {
+      const t = performance.now();
+      const done = await Promise.race([window.e2e.sink.play({ samples: new Float32Array(5512).fill(0.01), sampleRate: 22050 }).done, new Promise((r) => setTimeout(() => r("hung"), 3000))]);
+      if (done === true) ok++; slowest = Math.max(slowest, performance.now() - t);
+    }
+    return { ok, slowest: Math.round(slowest), totalMs: Math.round(performance.now() - t0), endedEvents: (L.ended ?? 0) - before };
+  });
+  check("喇叭连播 60 段：每段都收场，没有一段卡住", stress.ok === 60 && stress.slowest < 1500, JSON.stringify(stress));
+  console.log(`  （60 段里浏览器发了 ${stress.endedEvents} 次 ended；最慢的一段 ${stress.slowest} ms）`);
+
   await page.evaluate((v) => window.e2e.engine.delete(v), ZV);
   check("删除：包没了、引擎也卸了", await page.evaluate(async (v) => (await window.e2e.engine.status(v)).bytesCached === 0 && window.e2e.engine.loaded() === null, ZV));
   const noPack = await page.evaluate((v) => window.e2e.engine.load(v).then(() => "loaded", (e) => e.message), ZV);
