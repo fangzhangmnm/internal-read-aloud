@@ -59,7 +59,11 @@ export function createWebAudioSink(): WebAudioSink {
         if (settled) { clearInterval(watch); return; }
         if (c.state === "running") ran += now - last;
         last = now;
-        if (c.state === "closed" || ran >= (buf.duration + END_SLACK_S) * 1000) { clearInterval(watch); finish(); }
+        if (c.state === "closed" || ran >= (buf.duration + END_SLACK_S) * 1000) {
+          clearInterval(watch);
+          try { src.onended = null; src.stop(); src.disconnect(); } catch { /* 已经停了 */ }   // 声卡要是后来又走起来，这一段不许拖着尾巴和下一段叠在一起
+          finish();
+        }
       }, 100);
       return pb;
     },

@@ -1,6 +1,6 @@
 # @internal/read-aloud
 
-> created 2026-10-01 by Claude Fable 5.1 · as-of 0.1.6（2026-10-01；0.1.0 首发同日）
+> created 2026-10-01 by Claude Fable 5.1 · as-of 0.1.7（2026-10-01；0.1.0 首发同日）
 
 PWA 家族共享的逐句朗读：文字 → 句子 → 本机合成 → 播放，并告诉宿主「现在读到哪一句」。规则见 `CLAUDE.md`，公开面见 `api/read-aloud.api.md`。
 
