@@ -4,7 +4,7 @@
 
 出生依据：user 2026-10-01「日语学习那边逼出来了per sentence tts的需求，作为可选插件。然后我建议一开始就做成共享库，因为wxhw的验证读一遍也很有用」「记得模块化不要bloatware」「设置分栏 公共字体 逐句朗读 亮屏连续 做」。
 评估、实测数字、提案 .h = `../ai-docs/20261001-read-aloud-shared-lib-assessment.md`。
-**库名 `read-aloud` 是 AI 先起的**；user 批 0.1.0 时没提出异议，也没点名确认（改名 = 改 package.json 的 name、四个脚本里的包名、宿主的 import）。
+**库名 `read-aloud` 已定**（user 2026-10-01「就叫read-aloud吧，也符合这个产品的定位」）。
 
 - **本库 = 逐句朗读**：把一段文字切成句子、一句一句合成成语音、播出来、报「现在读到哪一句」。
 - **三层，各自可单独用**（`src/index.ts` 头注释）：① 分句（纯函数）② 连读控制器（零 DOM）③ 引擎门面 + 喇叭（浏览器）。worker 是「公共运行时 `src/worker/runtime.ts` + 每种引擎一个入口」（`./worker-sherpa` …），宿主把用得上的入口单独打成一个文件。
