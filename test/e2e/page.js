@@ -42,7 +42,7 @@ window.e2e = {
   /** 合成一句，回报时长 / 采样率 / 响度（不把 PCM 传回 node，除非 keep：留在 window.e2e.kept 里等取）。 */
   async synth(text, lang, o = {}) {
     const t0 = performance.now();
-    const c = await window.e2e.engine.synth(text, { lang, speaker: o.speaker ?? 0, speed: o.speed });
+    const c = await window.e2e.engine.synth(text, { lang, speaker: o.speaker ?? 0, speed: o.speed, steady: o.steady });
     let sum = 0; for (let i = 0; i < c.samples.length; i++) sum += c.samples[i] * c.samples[i];
     if (o.keep) (window.e2e.kept ??= {})[o.keep] = c;
     // 这一段里最长的一截「完全静音」（后端在小句之间垫的静音是精确的 0）

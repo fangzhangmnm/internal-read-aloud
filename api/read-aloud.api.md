@@ -200,7 +200,7 @@ export interface ReadAloudEvents {
     state: (s: ReadAloudState) => void;
 }
 
-// @public (undocumented)
+// @public
 export interface ReadAloudOptions {
     // (undocumented)
     lang?: SpeechLang;
@@ -210,6 +210,8 @@ export interface ReadAloudOptions {
     speaker?: number;
     // (undocumented)
     speed?: number;
+    // (undocumented)
+    steady?: boolean;
 }
 
 // @public (undocumented)
@@ -290,6 +292,7 @@ export interface Synthesizer {
         lang: SpeechLang;
         speaker?: number;
         speed?: number;
+        steady?: boolean;
     }): Promise<Clip>;
 }
 

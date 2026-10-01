@@ -127,6 +127,13 @@ describe("createReadAloud", () => {
     r2.ra.stop(); await r2.settle();
     eq(live(r2), 0, "stop silences everything");
   });
+  it("念法（steady）传给引擎；换了念法，已合成的句子重算", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0, { once: true, steady: true }); await r.synthAll();
+    eq(r.pendingSynth.length, 0); eq(r.log.filter((x) => x.startsWith("synth:")).length, 1);
+    r.ra.start(TEXT, 0, { once: true, steady: false });
+    eq(r.pendingSynth.length, 1, "re-synthesised"); eq(r.pendingSynth[0].o.steady, false);
+  });
   it("句间停顿跟着语速等比例缩：1.5 倍速 → 400 / 600 / 400", async () => {
     const r = rig();
     r.ra.start(TEXT, 0, { speed: 1.5 });

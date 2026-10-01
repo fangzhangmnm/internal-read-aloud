@@ -161,9 +161,9 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
     },
     loaded: () => (current ? { voice: current.voice, langs: [...current.langs] } : null),
     isKnownReady(voice, lang) { const st = known.get(voice); return st ? (lang ? st.langs.includes(lang) : st.langs.length > 0) : undefined; },
-    synth(text: string, o: { lang: SpeechLang; speaker?: number; speed?: number }) {
+    synth(text: string, o: { lang: SpeechLang; speaker?: number; speed?: number; steady?: boolean }) {
       if (!current) return Promise.reject(new Error("no voice loaded"));
-      return call<Clip>(() => ({ op: "synth", text, lang: o.lang, speaker: o.speaker ?? 0, speed: o.speed ?? 1 }), current.voice);
+      return call<Clip>(() => ({ op: "synth", text, lang: o.lang, speaker: o.speaker ?? 0, speed: o.speed ?? 1, steady: o.steady === true }), current.voice);
     },
     dispose() { for (const engine of [...channels.keys()]) closeChannel(engine, "read-aloud engine disposed"); current = null; },
   };

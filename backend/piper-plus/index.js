@@ -30,7 +30,10 @@ const FILES = Object.freeze({
   en: ["en/cmudict_data.json", "en/homographs.json"],
   zh: ["zh/pinyin_single.tone3.json", "zh/pinyin_phrases.tone3.json"],
 });
-const SCALES = Object.freeze({ noiseScale: 0.667, lengthScale: 1.5, noiseW: 0.5 });   // model README; config.json's 1.0 / 0.8 is the "rushed" setting
+const SCALES = Object.freeze({ noiseScale: 0.667, lengthScale: 1.5, noiseW: 0.5 });
+// `steady` (experiment, 2026-10-01 prosody-exp): less sampling noise + a little slower. Recogniser error zh 14.3 -> 4.8 %, en 12.3 -> 4.8 %,
+// ja 3.7 -> 1.3 %; every take identical. Possibly flatter — that is for ears to judge, hence a switch, not a default.
+const STEADY_SCALES = Object.freeze({ noiseScale: 0.333, lengthScale: 1.7, noiseW: 0 });   // model README; config.json's 1.0 / 0.8 is the "rushed" setting
 const MIN_CLAUSE_CHARS = { en: 20, zh: 5 };   // weak-break pieces shorter than this are glued; the pause lengths live in text.js (PAUSE_MS)
 
 const bytesOf = (files, name) => { const v = files.get(name); if (v === undefined) throw new Error(`piper-plus backend: "${name}" is missing from ctx.files`); return v instanceof Uint8Array ? v : new Uint8Array(v); };
@@ -50,6 +53,7 @@ const jsonOf = (files, name) => JSON.parse(new TextDecoder().decode(bytesOf(file
  * @property {"ja"|"en"|"zh"} lang
  * @property {number} [voice]     0 (default)
  * @property {number} [speed]     1 = the reference pace (length_scale 1.5); length_scale = 1.5 / speed. Clamped to 0.25 … 4.
+ * @property {boolean} [steady]  experiment: noise 0.333 / 0, length_scale 1.7 (see STEADY_SCALES)
  *
  * @typedef {Object} SynthResult
  * @property {Float32Array} samples   mono, −1 … 1, peak-normalised; length 0 when the text has nothing pronounceable
@@ -122,7 +126,8 @@ export function createPiperPlusBackend() {
       if (!state.g2p[lang]) throw new Error(`piper-plus backend: language "${lang}" is not available (loaded: ${state.langs.join(", ") || "none"})`);
       if (o.voice !== undefined && o.voice !== 0) throw new RangeError(`piper-plus backend: voice ${o.voice} does not exist (this model has one voice, index 0)`);
       const speed = Math.min(4, Math.max(0.25, Number.isFinite(o.speed) && o.speed > 0 ? o.speed : 1));
-      const scales = { ...SCALES, lengthScale: SCALES.lengthScale / speed };
+      const base = o.steady ? STEADY_SCALES : SCALES;
+      const scales = { ...base, lengthScale: base.lengthScale / speed };
       const sr = state.vits.sampleRate, str = stripMarkup(String(text ?? ""));
       const pieces = lang === "ja" ? [{ text: str, pauseMs: 0 }] : splitClausesDetailed(str, MIN_CLAUSE_CHARS[lang] ?? 20);
       const clips = [], gaps = [], debug = [];   // gaps[i] = silence (samples) after clip i
