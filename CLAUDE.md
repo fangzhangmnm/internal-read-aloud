@@ -10,14 +10,15 @@
 - **三层，各自可单独用**（`src/index.ts` 头注释）：① 分句（纯函数）② 连读控制器（零 DOM）③ 引擎门面 + 喇叭（浏览器）。worker 是「公共运行时 `src/worker/runtime.ts` + 每种引擎一个入口」（`./worker-sherpa` …），宿主把用得上的入口单独打成一个文件。
 - **界面全归宿主**：按钮、高亮、滚动、设置页、图标、文案。库里没有一行 DOM 结构、没有一个用户可见的字。
 - **不 bloat 的三条**：宿主 bundle 只进门面和分句；worker、引擎二进制、语音包第一次真用到才动；service worker 不许预缓存引擎和语音包（宿主的事，写在这提醒）。
-- **引擎二进制由宿主 vendor、用 URL 注入**（`engineBase`），不进本库的包。语音包清单由宿主内嵌（信任根 = packId）、字节走家族模型仓协议（`../20260903 PWA Models/README.md`）。
-- **联网只有一处**：`src/worker/runtime.ts` 下载语音包分片（只读 GET，逐片 sha256，对不上整包拒收）。Cache Storage 也只在这一个文件（缓存名宿主给，默认家族共享的 `pwa-models`）。**永不碰 localStorage / IndexedDB；永不用系统或云端的语音服务**（`speechSynthesis` 也不许：桌面浏览器会把文字发到服务器）。`test/redline-guard.test.mjs` 机械执法，别绕。
-- **后端可换**：`src/worker/backend.ts` 是一种引擎一个后端的形状。现有 `sherpa.ts`（家族已 vendor 的 sherpa-onnx WASM，TTS 已编入）。**user 2026-10-01 定：先用つくよみちゃん（piper-plus 引擎）兜底所有语言，别的音色以后慢慢加**——piper-plus 后端还没写，等浏览器路径和电脑参考实现对齐（排查现场 `~/jupyter/third-party/piper-plus/`）。
+- **门面只说「音色」，worker 只认「包」**：一个音色 = 一份 `VoiceDef`（模型仓 `voices/<id>.json`：必装的包 + 每种语言另外要的包 + 署名 / 条款原文）。宿主把音色定义和它点名的每个包的清单一起内嵌（信任根 = 清单的 packId）；字节走家族模型仓协议（`../20260903 PWA Models/README.md`），包名规矩见家族 `CLAUDE.md`「共享模型库」。**署名块和条款由宿主显示**（上游要求原文可见），库不画。
+- **引擎的大二进制不进本库的包**：piper-plus 的 wasm 和词典随语音包来（user 2026-10-01「放语音包、app 里钉哈希」「运行时如果以后支持第三方源的话不安全吧，还是写好hash就可以了」）；sherpa-onnx 的由宿主 vendor、`engineBase` 注入。**JS 胶水是代码，vendored 在 `backend/<引擎>/vendor/`**（出处写在各自的 `SOURCE.md`）。
+- **联网只有一处**：`src/worker/runtime.ts` 下载语音包分片（只读 GET，逐片 sha256，对不上整包拒收）。Cache Storage 也只在这一个文件（缓存名宿主给，默认家族共享的 `pwa-models`）。**永不碰 localStorage / IndexedDB；永不用系统或云端的语音服务**（`speechSynthesis` 也不许：桌面浏览器会把文字发到服务器）。`test/redline-guard.test.mjs` 机械执法（`src/` 和 `backend/` 里我们自己的 JS）；第三方胶水 grep 守不了，由整链测试守「装载 / 合成期间浏览器一个请求都不发」。别绕。
+- **后端可换**：`src/worker/backend.ts` 是一种引擎一个后端的形状。现有两个：`piper-plus.ts`（接 `backend/piper-plus/`，つくよみちゃん用；user 2026-10-01「先用她来兜底，以后慢慢加」）和 `sherpa.ts`（家族已 vendor 的 sherpa-onnx WASM，留给以后加别的音色）。**`backend/piper-plus/` 的 JS 逐字来自排查现场 `~/jupyter/third-party/piper-plus/backend/`**（证明它和电脑参考实现喂给模型的东西逐符号相同的测试都在那边）：改算法先在那边改、跑那边的对照测试，再拷过来。
 - **句间停顿归控制器**（同段 600 ms、跨段 900 ms，可配；600 = piper-plus 参考实现的句间静音。句内逗号处的停顿归后端）：合成出来的一句首尾几乎没有静音，不留气口听着就是「不喘气」。
 - **两处逐字拷贝，记账**：`src/sha256.ts` 和 worker 里「下载 / 校验 / 缓存」那一半来自 WebXiaoHeiWu `src/asr/`。WXHW 的识别这轮不动；等本库稳定后让它改吃本库，两份才合一。改算法 = 两边一起改。
 - **版本纪律同其他内部库**：开发期 `0.0.0`；版本号只在 user 过目真实导出面（`api/read-aloud.api.md`）之后才写；收货脚本只认打过 tag 的已发版；**发 0.1.0 之前必须 user 批**。
 - **开发期往宿主里装包只许用 `scripts/dev-install.sh`**（逐字节验货，拒绝往宿主的 main 上装）。
 - **只出货不送货**：本库的活到 commit 交付物为止；宿主收货、跑宿主测试、宿主发版是宿主 session 的活。
-- 测试两档：`npm test`（node：分句 / 控制器 / 包的纯函数 / 红线守卫）+ `npm run e2e`（构建后在无头 Chromium 里走整链：真引擎 + 真语音包 + 真 Cache + 真 Web Audio；测试包在检疫桶 `~/jupyter/third-party/sherpa-onnx-wasm/tts-probe/packs-test/`，没发布过）。构建 + 户口 `npm run build`（`api/` 是生成物，勿手改）。
+- 测试两档：`npm test`（node：分句 / 控制器 / 包的纯函数 / 红线守卫）+ `npm run e2e`（构建后在无头 Chromium 里走整链：两种真引擎 + 真语音包 + 真 Cache + 真 Web Audio，约一分钟；包在检疫桶：sherpa 测试包 `~/jupyter/third-party/sherpa-onnx-wasm/tts-probe/packs-test/`，つくよみちゃん五个小包 `~/jupyter/third-party/piper-plus/packs-local/`，由 `…/piper-plus/backend/build-packs.mjs` 打）。构建 + 户口 `npm run build`（`api/` 是生成物，勿手改）。
 - **这台开发机的显卡可能在跑别的长任务**：测试里的无头浏览器一律 `--disable-gpu`。
 - `journal/`、`journals/` 是人类区，AI 永不写。

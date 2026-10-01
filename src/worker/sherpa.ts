@@ -35,7 +35,8 @@ export function createSherpaBackend(): Backend {
   let tts: SherpaTts | null = null;
   let ec: SherpaTtsEngineConfig | null = null;
   return {
-    async load({ engineBase, manifest: m, files }) {
+    async load({ engineBase, manifests, files }) {
+      const m = manifests[0]!;   // sherpa 的音色 = 一个包：引擎配置写在它的清单里
       const Module = await ensureModule(engineBase);
       const conf = m.engineConfig as unknown as SherpaTtsEngineConfig;
       if (conf.kind !== "sherpa-offline-tts") throw new Error(`pack ${m.slug}: engineConfig.kind is "${String(conf.kind)}", expected "sherpa-offline-tts"`);
@@ -53,16 +54,15 @@ export function createSherpaBackend(): Backend {
       for (const name of conf.unlinkAfterLoad ?? []) { try { Module.FS.unlink(`${dir}/${name}`); } catch { /* ignore */ } }
       if (!created.handle) throw new Error("voice engine creation failed (see [sherpa] console output)");
       tts = created; ec = conf;
-      return { sampleRate: created.sampleRate, voices: created.numSpeakers };
+      return { sampleRate: created.sampleRate, speakers: created.numSpeakers };
     },
     synth(text, o): Clip {
-      if (!tts || !ec) throw new Error("no voice pack loaded");
+      if (!tts || !ec) throw new Error("no voice loaded");
       const r = tts.generateWithConfig(text, {
-        sid: o.voice, speed: o.speed,
+        sid: o.speaker, speed: o.speed,
         numSteps: ec.generate?.numSteps, silenceScale: ec.generate?.silenceScale ?? 0.2,
         extra: ec.passLang ? { lang: o.lang } : undefined,
       });
-      if (!r.samples.length) throw new Error("voice engine returned no audio");
       return { samples: r.samples, sampleRate: r.sampleRate };
     },
     unload() { if (tts) { try { tts.free(); } catch { /* ignore */ } tts = null; ec = null; } },

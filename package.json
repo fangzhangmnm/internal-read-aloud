@@ -7,12 +7,17 @@
   "files": [
     "dist",
     "src",
+    "backend",
     "README.md"
   ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./worker-piper-plus": {
+      "types": "./dist/worker/piper-plus-entry.d.ts",
+      "default": "./dist/worker/piper-plus-entry.js"
     },
     "./worker-sherpa": {
       "types": "./dist/worker/sherpa-entry.d.ts",

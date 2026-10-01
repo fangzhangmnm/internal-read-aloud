@@ -31,11 +31,14 @@ export declare interface EmbeddedPack {
 }
 
 export declare interface LoadResult {
-    slug: string;
+    voice: string;
+    /** 这次装进引擎的语言。 */
+    langs: SpeechLang[];
     alreadyLoaded: boolean;
     createMs: number;
     sampleRate: number;
-    voices: number;
+    /** 说话人个数。 */
+    speakers: number;
 }
 
 /**
@@ -66,7 +69,7 @@ export declare interface PackManifest {
     name: string;
     task: string;
     lang: string[];
-    /** 哪个后端来跑：现在只有 "sherpa-onnx"。 */
+    /** 这个包是给哪个引擎用的（说明用；真正决定用哪个 worker 的是音色定义里的 engine）。 */
     engine: string;
     engineConfig: Record<string, unknown>;
     files: PackFile[];
@@ -149,7 +152,7 @@ export declare interface ReadAloudEvents {
 
 export declare interface ReadAloudOptions {
     lang?: SpeechLang;
-    voice?: number;
+    speaker?: number;
     speed?: number;
     once?: boolean;
 }
@@ -195,26 +198,43 @@ export declare interface SherpaTtsEngineConfig {
 }
 
 export declare interface SpeechEngine extends Synthesizer {
-    status(slug: string): Promise<PackStatus>;
-    /** 从 base（模型源，如 https://…/pwa-models）下载并逐片校验。可续传。 */
-    download(slug: string, base: string, onProgress?: (p: PackProgress) => void): Promise<PackStatus>;
-    /** 用户自己拿到的文件：一个整包 .bin 或全部 chunk-NNN。逐片校验后入缓存。 */
-    importFiles(slug: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<PackStatus>;
-    delete(slug: string): Promise<void>;
-    /** 把语音包装进引擎（首次几秒）。synth 之前必须先 load。 */
-    load(slug: string): Promise<LoadResult>;
-    /** 现在装着哪个包；没有 = null。 */
-    loaded(): string | null;
-    /** 最近一次 status / download / delete 的结论（同步问「有没有包」用）；没问过 = undefined。 */
-    isKnownReady(slug: string): boolean | undefined;
+    status(voice: string): Promise<VoiceStatus>;
+    /**
+     * 从 base（模型源，如 https://…/pwa-models）下载并逐片校验。可续传；已经有的包（别的音色、同源的兄弟 app 下过的）不重下。
+     * langs = 只下这几种语言要的包；不给 = 这个音色的全部语言。进度按「这次要的所有包」的总字节报。
+     */
+    download(voice: string, base: string, opts?: {
+        langs?: readonly SpeechLang[];
+        onProgress?: (p: PackProgress) => void;
+    }): Promise<VoiceStatus>;
+    /** 用户自己拿到的文件（任意个包的分片，或整包一个文件）：按内容哈希认领，验过才入缓存。文件名不作数。 */
+    importFiles(voice: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<VoiceStatus>;
+    /** 删掉这个音色的包；宿主内嵌的别的音色里、已经装着的那些还要用的包留着（运行时、共用的词典）。同源兄弟 app 是否在用看不见：它那边会显示「未下载」，重下即可。 */
+    delete(voice: string): Promise<void>;
+    /**
+     * 把音色装进引擎（首次几秒）。synth 之前必须先 load。
+     * langs = 只装这几种语言（省内存：日语前端固定占 160 MB）；不给 = 已经下好的全部语言。必装的包不齐、或点名的语言一种都没下 → 拒绝，错误信息 "pack-missing"。
+     */
+    load(voice: string, opts?: {
+        langs?: readonly SpeechLang[];
+    }): Promise<LoadResult>;
+    /** 现在装着哪个音色、哪几种语言；没有 = null。 */
+    loaded(): {
+        voice: string;
+        langs: SpeechLang[];
+    } | null;
+    /** 最近一次 status / download / import / delete 的结论（同步问「能不能念」用）：给 lang = 那种语言能不能念；不给 = 有没有任何一种能念。没问过 = undefined。 */
+    isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
     /** 关掉所有 worker，归还内存（WASM 堆只涨不缩，这是唯一的归还办法）。之后再用会重新起。 */
     dispose(): void;
 }
 
 export declare interface SpeechEngineDeps {
-    /** 清单里的 engine 名 → worker 脚本（本库的 `./worker-<引擎>` 入口，宿主单独打成一个文件）。 */
+    /** 音色定义里的 engine 名 → worker 脚本（本库的 `./worker-<引擎>` 入口，宿主单独打成一个文件）。 */
     workers: Record<string, WorkerSpec>;
-    /** 宿主内嵌的语音包清单（信任根）。 */
+    /** 宿主内嵌的音色定义：id → 定义。 */
+    voices: Record<string, VoiceDef>;
+    /** 宿主内嵌的语音包清单（信任根）：音色定义点名的每个包都要在。 */
     packs: Record<string, EmbeddedPack>;
     /** 引擎文件目录（相对页面或绝对）：只有二进制由宿主 vendor 的引擎才用（sherpa-onnx）；二进制随语音包走的引擎不用给。 */
     engineBase?: string;
@@ -228,12 +248,64 @@ export declare type SpeechLang = "ja" | "zh" | "en";
 export declare function splitSentences(text: string): SentenceSpan[];
 
 /** 控制器向引擎要的唯一一件事。 */
+/** speaker = 一个模型里有几个说话人时的编号（缺省 0）。没有可念的内容（只有标点）→ 长度 0 的一段，控制器跳过这一句。 */
 export declare interface Synthesizer {
     synth(text: string, opts: {
         lang: SpeechLang;
-        voice?: number;
+        speaker?: number;
         speed?: number;
     }): Promise<Clip>;
+}
+
+/**
+ * 一个音色 = 一份音色定义：它由哪几个包组成、谁来跑、能念什么、要显示什么署名。
+ * 模型仓 `voices/<id>.json` 就是这个形状；宿主 build 时把它和它点名的每个包的清单一起内嵌。
+ * 拆成几个包是为了让别的音色、别的 app 能共用其中一些（运行时、某种语言的词典），也为了只下用得上的语言。
+ */
+export declare interface VoiceDef {
+    v: number;
+    id: string;
+    /** 给人看的名字（宿主可以用自己的文案盖掉）。 */
+    name: string;
+    /** 哪个后端来跑：门面按它找 worker（"piper-plus" / "sherpa-onnx" …）。 */
+    engine: string;
+    /** 一定要有的包（权重、运行时）。 */
+    packs: string[];
+    /** 每种语言另外要的包。**键 = 这个音色能念的语言**；不需要额外包的语言写空数组。 */
+    langPacks: Partial<Record<SpeechLang, string[]>>;
+    /** 每个包的 packId（模型仓那头写的，宿主 build 时拿来对账；运行时的信任根是内嵌清单自己的 packId）。 */
+    packIds?: Record<string, string>;
+    /** 说话人：id = 引擎里的编号。不写 = 只有 0 号。 */
+    speakers?: {
+        id: number;
+        name: string;
+    }[];
+    /** 必须显示在界面上的署名（原文，库不翻译）。 */
+    credit?: string;
+    /** 必须让用户看到的使用条款（原文）。 */
+    terms?: string;
+    termsUrl?: string;
+    /** 其余出处（一行一条）。 */
+    attribution?: string[];
+    notes?: string;
+}
+
+/** 这个音色能念的语言。 */
+export declare function voiceLangs(v: VoiceDef): SpeechLang[];
+
+/** 这个音色要用到的包（去重，顺序稳定）：必装的 + 点名那几种语言的；不点名 = 全部语言。 */
+export declare function voicePacks(v: VoiceDef, langs?: readonly SpeechLang[]): string[];
+
+/** 一个音色的状态（门面把它那几个包的状态合起来）。 */
+export declare interface VoiceStatus {
+    voice: string;
+    /** 这个音色所有语言的包都齐了。 */
+    ready: boolean;
+    /** 现在就能念的语言（必装包齐 + 那种语言的包齐）。 */
+    langs: SpeechLang[];
+    bytesCached: number;
+    bytesTotal: number;
+    packs: PackStatus[];
 }
 
 export declare interface WebAudioSink extends AudioSink {

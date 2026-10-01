@@ -1,5 +1,6 @@
 // 朗读 worker 的公共运行时：语音包的下载 / 校验 / 缓存 / 取出 + 把合成请求转给后端。主线程只经 src/engine.ts 发消息。
 // 每种引擎一个入口文件（sherpa-entry.ts / piper-plus-entry.ts），入口只做一件事：startWorker({ 引擎名: 后端工厂 })。
+// 这里只认「包」：一次装载 = 几个包的文件合成一张表交给后端（音色由哪几个包组成是门面的事）。
 // created 2026-10-01 by Claude Fable 5.1（包的那一半移植自 WebXiaoHeiWu src/asr/worker.ts，2026-09-03 同一作者）
 //
 //   · 信任根 = 宿主内嵌的清单（init 时给）：分片从「模型源 URL / 用户导入的文件」来都先对 chunks[].sha256 再入缓存；对不上整包拒收。
@@ -8,8 +9,8 @@
 //   · 包里以 `.gz` 结尾的文件是压缩存放的：装进引擎前在这里解开，后端看到的是去掉 `.gz` 的名字和解开后的字节。
 import { Sha256 } from "../sha256.ts";
 import { assembleFiles, logicalName, type PackManifest } from "../packs.ts";
-import type { Request, Response, PackProgress, PackStatus, LoadResult, WorkerInit } from "../protocol.ts";
-import type { Backend } from "./backend.ts";
+import type { Request, Response, PackProgress, PackStatus, WorkerLoadResult, WorkerInit } from "../protocol.ts";
+import type { Backend, BackendInfo } from "./backend.ts";
 
 const post = (m: Response, transfer: Transferable[] = []) => (self as unknown as { postMessage(m: unknown, t: Transferable[]): void }).postMessage(m, transfer);
 const keyOf = (slug: string, name: string) => `${self.location.origin}/__pwa-models__/${slug}/${name}`;
@@ -53,11 +54,7 @@ async function status(slug: string): Promise<PackStatus> {
 
 async function download(slug: string, base: string, progress: (p: PackProgress) => void): Promise<PackStatus> {
   const { packId, manifest: m } = manifestOf(slug);
-  // 同 slug 重打包（packId 变了）→ 旧分片全部作废重下，不能只看尺寸对就免验
-  const cache0 = await openCache();
-  const marker = await cache0.match(keyOf(slug, "verified.json"));
-  const markedId = marker ? ((await marker.json()) as { packId?: string }).packId : null;
-  if (marker && markedId !== packId) { for (const c of m.chunks) await cache0.delete(keyOf(slug, c.name)); await cache0.delete(keyOf(slug, "verified.json")); }
+  await dropIfStale(slug);   // 同 slug 重打包（packId 变了）→ 旧分片全部作废重下，不能只看尺寸对就免验
   const sizes = await cachedChunkSizes(slug, m);
   let done = sizes.reduce((a, n, i) => a + (n === m.chunks[i]!.bytes ? n : 0), 0);
   progress({ done, total: m.totalBytes });
@@ -83,27 +80,82 @@ async function download(slug: string, base: string, progress: (p: PackProgress) 
   return status(slug);
 }
 
-/** 用户导入：单个整文件（= 所有文件按序拼接的 .bin，size 必须等于 totalBytes）或全部 chunk-NNN 文件。 */
-async function importFiles(slug: string, files: File[], progress: (p: PackProgress) => void): Promise<PackStatus> {
+/** 缓存里这个包的每一片重新算一遍哈希（没被这次调用验过的才算）；全对 → 盖「已验」章。有一片不对就删掉那一片、不盖章。 */
+async function sealIfComplete(slug: string, fresh: ReadonlySet<string>): Promise<void> {
   const { packId, manifest: m } = manifestOf(slug);
-  const byName = new Map(files.map((f) => [f.name, f] as const));
-  const whole = files.length === 1 && files[0]!.size === m.totalBytes ? files[0]! : null;
-  let offset = 0, done = 0;
+  const sizes = await cachedChunkSizes(slug, m);
+  if (!sizes.every((n, i) => n === m.chunks[i]!.bytes)) return;
+  const cache = await openCache();
   for (const c of m.chunks) {
-    const blob = whole ? whole.slice(offset, offset + c.bytes) : byName.get(c.name);
-    if (!blob) throw new Error(`missing ${c.name} (select the whole .bin or every chunk file)`);
-    if (blob.size !== c.bytes) throw new Error(`${c.name}: size ${blob.size}, expected ${c.bytes}`);
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    if (new Sha256().update(bytes).hex() !== c.sha256) throw new Error(`${c.name}: sha256 mismatch (wrong or corrupted file)`);
-    await putChunk(slug, c.name, bytes);
-    offset += c.bytes; done += c.bytes; progress({ done, total: m.totalBytes });
+    if (fresh.has(c.name)) continue;
+    const r = await cache.match(keyOf(slug, c.name));
+    const ok = !!r && new Sha256().update(new Uint8Array(await r.arrayBuffer())).hex() === c.sha256;
+    if (!ok) { await cache.delete(keyOf(slug, c.name)); return; }
   }
   await markVerified(slug, packId);
-  return status(slug);
+}
+/** 同 slug 重打包过（缓存里的「已验」章是别的 packId）→ 旧分片全部作废。 */
+async function dropIfStale(slug: string): Promise<void> {
+  const { packId, manifest: m } = manifestOf(slug);
+  const cache = await openCache();
+  const marker = await cache.match(keyOf(slug, "verified.json"));
+  if (!marker || ((await marker.json()) as { packId?: string }).packId === packId) return;
+  for (const c of m.chunks) await cache.delete(keyOf(slug, c.name));
+  await cache.delete(keyOf(slug, "verified.json"));
+}
+
+/**
+ * 用户导入：给一把文件，按**内容哈希**认它们是哪个包的哪一片（文件名不作数——几个包的分片都叫 chunk-000）。
+ * 认得的逐片入缓存；尺寸和哪一片都对不上的文件直接略过（用户把 manifest.json、LICENSE.txt 一起选进来不算错）；
+ * 尺寸对得上、哈希对不上的 = 坏文件，报错。也收「整包一个文件」（= 所有分片按序拼接，尺寸等于包的 totalBytes）。
+ */
+async function importFiles(slugs: string[], files: File[], progress: (p: PackProgress) => void): Promise<PackStatus[]> {
+  const packs = slugs.map((slug) => ({ slug, m: manifestOf(slug).manifest }));
+  for (const p of packs) await dropIfStale(p.slug);
+  const fresh = new Map(packs.map((p) => [p.slug, new Set<string>()] as const));
+  const total = files.reduce((a, f) => a + f.size, 0);
+  let done = 0, matched = 0; const bad: string[] = [];
+  for (const f of files) {
+    const whole = packs.find((p) => p.m.chunks.length > 1 && p.m.totalBytes === f.size);
+    if (whole) {
+      let offset = 0;
+      for (const c of whole.m.chunks) {
+        const bytes = new Uint8Array(await f.slice(offset, offset + c.bytes).arrayBuffer());
+        if (new Sha256().update(bytes).hex() !== c.sha256) throw new Error(`${f.name}: sha256 mismatch at ${c.name} (wrong or corrupted file)`);
+        await putChunk(whole.slug, c.name, bytes); fresh.get(whole.slug)!.add(c.name);
+        offset += c.bytes; progress({ done: done + offset, total });
+      }
+      matched++;
+    } else {
+      const sameSize = packs.flatMap((p) => p.m.chunks.filter((c) => c.bytes === f.size).map((c) => ({ slug: p.slug, c })));
+      if (sameSize.length) {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        const hex = new Sha256().update(bytes).hex();
+        const hits = sameSize.filter((x) => x.c.sha256 === hex);
+        if (!hits.length) bad.push(f.name);
+        for (const h of hits) { await putChunk(h.slug, h.c.name, bytes); fresh.get(h.slug)!.add(h.c.name); }
+        if (hits.length) matched++;
+      }
+    }
+    done += f.size; progress({ done, total });
+  }
+  for (const p of packs) await sealIfComplete(p.slug, fresh.get(p.slug)!);
+  if (bad.length) throw new Error(`${bad[0]}: sha256 mismatch (wrong or corrupted file)`);
+  if (!matched) throw new Error("no-matching-file");
+  return Promise.all(slugs.map(status));
+}
+
+async function downloadAll(slugs: string[], base: string, progress: (p: PackProgress) => void): Promise<PackStatus[]> {
+  const total = slugs.reduce((a, s) => a + manifestOf(s).manifest.totalBytes, 0);
+  const have = (await Promise.all(slugs.map(status))).map((st) => st.bytesCached);   // 已经在缓存里的算在起点里
+  const report = () => progress({ done: have.reduce((a, b) => a + b, 0), total });
+  report();
+  for (let i = 0; i < slugs.length; i++) await download(slugs[i]!, base, (p) => { have[i] = p.done; report(); });
+  return Promise.all(slugs.map(status));
 }
 
 async function deletePack(slug: string): Promise<void> {
-  if (loaded?.slug === slug) unload();
+  if (loaded?.slugs.includes(slug)) await unload();
   const { manifest: m } = manifestOf(slug);
   const cache = await openCache();
   for (const c of m.chunks) await cache.delete(keyOf(slug, c.name));
@@ -115,18 +167,13 @@ let BACKENDS: Record<string, () => Backend> = {};
 async function gunzip(b: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(new Blob([b as unknown as BlobPart]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
 }
-let loaded: { slug: string; backend: Backend; info: { sampleRate: number; voices: number } } | null = null;
+let loaded: { key: string; slugs: string[]; backend: Backend; info: BackendInfo } | null = null;
 
-function unload(): void { if (loaded) { try { loaded.backend.unload(); } catch { /* ignore */ } loaded = null; } }
+async function unload(): Promise<void> { if (loaded) { const l = loaded; loaded = null; try { await l.backend.unload(); } catch { /* ignore */ } } }
 
-async function load(slug: string): Promise<LoadResult> {
-  if (loaded?.slug === slug) return { slug, alreadyLoaded: true, createMs: 0, ...loaded.info };
-  const st = await status(slug);
-  if (!st.ready) throw new Error("pack-missing");
-  unload();
+/** 一个包 → 它的文件（压缩存放的解开），加进 files。一次只把一个包的原始字节放在内存里。 */
+async function readPack(slug: string, files: Map<string, Uint8Array>): Promise<PackManifest> {
   const { manifest: m } = manifestOf(slug);
-  const make = BACKENDS[m.engine];
-  if (!make) throw new Error(`pack ${slug}: no backend for engine "${m.engine}"`);
   const cache = await openCache();
   const chunks: Uint8Array[] = [];
   for (const c of m.chunks) {
@@ -136,17 +183,31 @@ async function load(slug: string): Promise<LoadResult> {
   }
   const raw = assembleFiles(m, chunks);
   chunks.length = 0;
-  const files = new Map<string, Uint8Array>();
   for (let i = 0; i < m.files.length; i++) {
     const path = m.files[i]!.path, name = logicalName(path);
+    if (files.has(name)) throw new Error(`pack ${slug}: file "${name}" is also in another pack of this voice`);
     files.set(name, name === path ? raw[i]! : await gunzip(raw[i]!));
     raw[i] = new Uint8Array(0);   // 放手：压缩件解开后原字节不留
   }
+  return m;
+}
+
+async function load(engine: string, key: string, slugs: string[]): Promise<WorkerLoadResult> {
+  if (loaded?.key === key) return { alreadyLoaded: true, createMs: 0, ...loaded.info };
+  const make = BACKENDS[engine];
+  if (!make) throw new Error(`this worker has no backend for engine "${engine}"`);
+  for (const slug of slugs) if (!(await status(slug)).ready) throw new Error("pack-missing");
+  await unload();
+  const files = new Map<string, Uint8Array>(), manifests: PackManifest[] = [];
+  for (const slug of slugs) manifests.push(await readPack(slug, files));
   const backend = make();
   const t0 = performance.now();
-  const info = await backend.load({ engineBase: cfg().engineBase, manifest: m, files });
-  loaded = { slug, backend, info };
-  return { slug, alreadyLoaded: false, createMs: Math.round(performance.now() - t0), ...info };
+  let info: BackendInfo;
+  try { info = await backend.load({ engineBase: cfg().engineBase, manifests, files }); }
+  catch (e) { try { await backend.unload(); } catch { /* ignore */ } throw e; }
+  finally { files.clear(); }
+  loaded = { key, slugs: [...slugs], backend, info };
+  return { alreadyLoaded: false, createMs: Math.round(performance.now() - t0), ...info };
 }
 
 // ── 消息泵（严格串行：引擎单线程，请求排队） ──
@@ -164,18 +225,18 @@ function onMessage(e: MessageEvent<Request>): void {
       let result: unknown = null; let transfer: Transferable[] = [];
       switch (req.op) {
         case "init": init = req.init; break;
-        case "status": result = await status(req.slug); break;
-        case "download": result = await download(req.slug, req.base, progress); break;
-        case "import": result = await importFiles(req.slug, req.files, progress); break;
-        case "delete": await deletePack(req.slug); break;
-        case "load": result = await load(req.slug); break;
+        case "status": result = await Promise.all(req.slugs.map(status)); break;
+        case "download": result = await downloadAll(req.slugs, req.base, progress); break;
+        case "import": result = await importFiles(req.slugs, req.files, progress); break;
+        case "delete": for (const slug of req.slugs) await deletePack(slug); break;
+        case "load": result = await load(req.engine, req.key, req.slugs); break;
         case "synth": {
-          if (!loaded) throw new Error("no voice pack loaded");
-          const clip = await loaded.backend.synth(req.text, { lang: req.lang, voice: req.voice, speed: req.speed });
-          result = clip; transfer = [clip.samples.buffer as ArrayBuffer];
+          if (!loaded) throw new Error("no voice loaded");
+          const clip = await loaded.backend.synth(req.text, { lang: req.lang, speaker: req.speaker, speed: req.speed });
+          result = clip; if (clip.samples.buffer.byteLength) transfer = [clip.samples.buffer as ArrayBuffer];
           break;
         }
-        case "unload": unload(); break;
+        case "unload": await unload(); break;
       }
       post({ id: req.id, ok: true, result }, transfer);
     } catch (err) {

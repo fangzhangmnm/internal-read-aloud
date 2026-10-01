@@ -47,12 +47,12 @@ export interface LoadResult {
     alreadyLoaded: boolean;
     // (undocumented)
     createMs: number;
+    langs: SpeechLang[];
     // (undocumented)
     sampleRate: number;
+    speakers: number;
     // (undocumented)
-    slug: string;
-    // (undocumented)
-    voices: number;
+    voice: string;
 }
 
 // @public
@@ -207,9 +207,9 @@ export interface ReadAloudOptions {
     // (undocumented)
     once?: boolean;
     // (undocumented)
-    speed?: number;
+    speaker?: number;
     // (undocumented)
-    voice?: number;
+    speed?: number;
 }
 
 // @public (undocumented)
@@ -249,16 +249,23 @@ export interface SherpaTtsEngineConfig {
 
 // @public (undocumented)
 export interface SpeechEngine extends Synthesizer {
-    // (undocumented)
-    delete(slug: string): Promise<void>;
+    delete(voice: string): Promise<void>;
     dispose(): void;
-    download(slug: string, base: string, onProgress?: (p: PackProgress) => void): Promise<PackStatus>;
-    importFiles(slug: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<PackStatus>;
-    isKnownReady(slug: string): boolean | undefined;
-    load(slug: string): Promise<LoadResult>;
-    loaded(): string | null;
+    download(voice: string, base: string, opts?: {
+        langs?: readonly SpeechLang[];
+        onProgress?: (p: PackProgress) => void;
+    }): Promise<VoiceStatus>;
+    importFiles(voice: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<VoiceStatus>;
+    isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
+    load(voice: string, opts?: {
+        langs?: readonly SpeechLang[];
+    }): Promise<LoadResult>;
+    loaded(): {
+        voice: string;
+        langs: SpeechLang[];
+    } | null;
     // (undocumented)
-    status(slug: string): Promise<PackStatus>;
+    status(voice: string): Promise<VoiceStatus>;
 }
 
 // @public (undocumented)
@@ -266,6 +273,7 @@ export interface SpeechEngineDeps {
     cacheName?: string;
     engineBase?: string;
     packs: Record<string, EmbeddedPack>;
+    voices: Record<string, VoiceDef>;
     workers: Record<string, WorkerSpec>;
 }
 
@@ -280,9 +288,53 @@ export interface Synthesizer {
     // (undocumented)
     synth(text: string, opts: {
         lang: SpeechLang;
-        voice?: number;
+        speaker?: number;
         speed?: number;
     }): Promise<Clip>;
+}
+
+// @public
+export interface VoiceDef {
+    attribution?: string[];
+    credit?: string;
+    engine: string;
+    // (undocumented)
+    id: string;
+    langPacks: Partial<Record<SpeechLang, string[]>>;
+    name: string;
+    // (undocumented)
+    notes?: string;
+    packIds?: Record<string, string>;
+    packs: string[];
+    speakers?: {
+        id: number;
+        name: string;
+    }[];
+    terms?: string;
+    // (undocumented)
+    termsUrl?: string;
+    // (undocumented)
+    v: number;
+}
+
+// @public
+export function voiceLangs(v: VoiceDef): SpeechLang[];
+
+// @public
+export function voicePacks(v: VoiceDef, langs?: readonly SpeechLang[]): string[];
+
+// @public
+export interface VoiceStatus {
+    // (undocumented)
+    bytesCached: number;
+    // (undocumented)
+    bytesTotal: number;
+    langs: SpeechLang[];
+    // (undocumented)
+    packs: PackStatus[];
+    ready: boolean;
+    // (undocumented)
+    voice: string;
 }
 
 // @public (undocumented)

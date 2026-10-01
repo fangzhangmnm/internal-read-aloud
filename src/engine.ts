@@ -2,19 +2,24 @@
 //
 // 这里一个字节都不下、一行引擎代码都不跑：worker、引擎二进制、语音包全在第一次真用到时才动。
 // 宿主不开朗读 = bundle 里只多这个门面。
-// 每种引擎一个 worker（清单里的 `engine` 名决定用哪个）：不同引擎的装法不一样（sherpa 要 classic worker，piper-plus 要 module worker），
-// 宿主只打它用得上的那几个。同一时刻只有一个语音包装在引擎里；换到另一种引擎的包时，前一个 worker 直接关掉还内存。
+//
+// 对宿主说的是「音色」，不是「包」：一个音色由几个包组成（权重 / 运行时 / 每种语言的词典，见 packs.ts 的 VoiceDef），
+// 哪几个、下没下齐、装哪几种语言，都在这里算；worker 只认包。
+// 每种引擎一个 worker（音色定义里的 `engine` 名决定用哪个）：不同引擎的装法不一样（sherpa 要 classic worker，piper-plus 要 module worker），
+// 宿主只打它用得上的那几个。同一时刻只有一个音色装在引擎里；换到另一种引擎的音色时，前一个 worker 直接关掉还内存。
 import type { SpeechLang } from "./sentences.ts";
 import type { Clip, Synthesizer } from "./read-aloud.ts";
-import type { EmbeddedPack } from "./packs.ts";
-import type { Request, Response, PackProgress, PackStatus, LoadResult, WorkerInit } from "./protocol.ts";
+import { voiceLangs, voicePacks, type EmbeddedPack, type VoiceDef } from "./packs.ts";
+import type { Request, Response, PackProgress, PackStatus, VoiceStatus, LoadResult, WorkerLoadResult, WorkerInit } from "./protocol.ts";
 
 /** 一个 worker 脚本：url 由宿主 build 注入（带 hash）；type 缺省 classic。 */
 export interface WorkerSpec { url: string; type?: "classic" | "module" }
 export interface SpeechEngineDeps {
-  /** 清单里的 engine 名 → worker 脚本（本库的 `./worker-<引擎>` 入口，宿主单独打成一个文件）。 */
+  /** 音色定义里的 engine 名 → worker 脚本（本库的 `./worker-<引擎>` 入口，宿主单独打成一个文件）。 */
   workers: Record<string, WorkerSpec>;
-  /** 宿主内嵌的语音包清单（信任根）。 */
+  /** 宿主内嵌的音色定义：id → 定义。 */
+  voices: Record<string, VoiceDef>;
+  /** 宿主内嵌的语音包清单（信任根）：音色定义点名的每个包都要在。 */
   packs: Record<string, EmbeddedPack>;
   /** 引擎文件目录（相对页面或绝对）：只有二进制由宿主 vendor 的引擎才用（sherpa-onnx）；二进制随语音包走的引擎不用给。 */
   engineBase?: string;
@@ -22,18 +27,25 @@ export interface SpeechEngineDeps {
   cacheName?: string;
 }
 export interface SpeechEngine extends Synthesizer {
-  status(slug: string): Promise<PackStatus>;
-  /** 从 base（模型源，如 https://…/pwa-models）下载并逐片校验。可续传。 */
-  download(slug: string, base: string, onProgress?: (p: PackProgress) => void): Promise<PackStatus>;
-  /** 用户自己拿到的文件：一个整包 .bin 或全部 chunk-NNN。逐片校验后入缓存。 */
-  importFiles(slug: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<PackStatus>;
-  delete(slug: string): Promise<void>;
-  /** 把语音包装进引擎（首次几秒）。synth 之前必须先 load。 */
-  load(slug: string): Promise<LoadResult>;
-  /** 现在装着哪个包；没有 = null。 */
-  loaded(): string | null;
-  /** 最近一次 status / download / delete 的结论（同步问「有没有包」用）；没问过 = undefined。 */
-  isKnownReady(slug: string): boolean | undefined;
+  status(voice: string): Promise<VoiceStatus>;
+  /**
+   * 从 base（模型源，如 https://…/pwa-models）下载并逐片校验。可续传；已经有的包（别的音色、同源的兄弟 app 下过的）不重下。
+   * langs = 只下这几种语言要的包；不给 = 这个音色的全部语言。进度按「这次要的所有包」的总字节报。
+   */
+  download(voice: string, base: string, opts?: { langs?: readonly SpeechLang[]; onProgress?: (p: PackProgress) => void }): Promise<VoiceStatus>;
+  /** 用户自己拿到的文件（任意个包的分片，或整包一个文件）：按内容哈希认领，验过才入缓存。文件名不作数。 */
+  importFiles(voice: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<VoiceStatus>;
+  /** 删掉这个音色的包；宿主内嵌的别的音色里、已经装着的那些还要用的包留着（运行时、共用的词典）。同源兄弟 app 是否在用看不见：它那边会显示「未下载」，重下即可。 */
+  delete(voice: string): Promise<void>;
+  /**
+   * 把音色装进引擎（首次几秒）。synth 之前必须先 load。
+   * langs = 只装这几种语言（省内存：日语前端固定占 160 MB）；不给 = 已经下好的全部语言。必装的包不齐、或点名的语言一种都没下 → 拒绝，错误信息 "pack-missing"。
+   */
+  load(voice: string, opts?: { langs?: readonly SpeechLang[] }): Promise<LoadResult>;
+  /** 现在装着哪个音色、哪几种语言；没有 = null。 */
+  loaded(): { voice: string; langs: SpeechLang[] } | null;
+  /** 最近一次 status / download / import / delete 的结论（同步问「能不能念」用）：给 lang = 那种语言能不能念；不给 = 有没有任何一种能念。没问过 = undefined。 */
+  isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
   /** 关掉所有 worker，归还内存（WASM 堆只涨不缩，这是唯一的归还办法）。之后再用会重新起。 */
   dispose(): void;
 }
@@ -42,16 +54,19 @@ type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; onPr
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 type Req = DistributiveOmit<Request, "id">;
 interface Channel { worker: Worker; pending: Map<number, Pending> }
+const asError = (e: unknown) => (e instanceof Error ? e : new Error(String(e)));
 
 export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
   const channels = new Map<string, Channel>();   // engine 名 → 活着的 worker
-  let seq = 0, loadedSlug: string | null = null;
-  const knownReady = new Map<string, boolean>();
+  let seq = 0;
+  let current: { voice: string; langs: SpeechLang[] } | null = null;
+  const known = new Map<string, VoiceStatus>();
 
-  function engineOf(slug: string): string {
-    const p = deps.packs[slug];
-    if (!p) throw new Error(`unknown pack: ${slug}`);
-    return p.manifest.engine;
+  function voiceOf(id: string): VoiceDef {
+    const v = deps.voices[id];
+    if (!v) throw new Error(`unknown voice: ${id}`);
+    for (const slug of voicePacks(v)) if (!deps.packs[slug]) throw new Error(`voice ${id}: pack "${slug}" is not embedded`);
+    return v;
   }
   function closeChannel(engine: string, why: string): void {
     const ch = channels.get(engine); if (!ch) return;
@@ -60,7 +75,7 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
     for (const p of ch.pending.values()) p.reject(err);
     ch.pending.clear();
     try { ch.worker.terminate(); } catch { /* ignore */ }
-    if (loadedSlug && engineOf(loadedSlug) === engine) loadedSlug = null;
+    if (current && deps.voices[current.voice]?.engine === engine) current = null;
   }
   function channel(engine: string): Channel {
     const have = channels.get(engine); if (have) return have;
@@ -85,33 +100,71 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
     return new Promise<T>((resolve, reject) => {
       ch.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, onProgress });
       try { ch.worker.postMessage({ ...req, id }); }
-      catch (e) { ch.pending.delete(id); reject(e instanceof Error ? e : new Error(String(e))); }
+      catch (e) { ch.pending.delete(id); reject(asError(e)); }
     });
   }
-  /** 按包找 worker 再发（建 worker 失败也走 reject，不同步抛）。 */
-  function call<T>(slug: string, req: Req, onProgress?: (p: PackProgress) => void): Promise<T> {
-    try { return send<T>(channel(engineOf(slug)), req, onProgress); }
-    catch (e) { return Promise.reject(e instanceof Error ? e : new Error(String(e))); }
+  /** 按音色找 worker 再发（音色不认识、建 worker 失败都走 reject，不同步抛）。 */
+  function call<T>(make: (v: VoiceDef) => Req, voice: string, onProgress?: (p: PackProgress) => void): Promise<T> {
+    try { const v = voiceOf(voice); return send<T>(channel(v.engine), make(v), onProgress); }
+    catch (e) { return Promise.reject(asError(e)); }
   }
-  const note = (st: PackStatus): PackStatus => { knownReady.set(st.slug, st.ready); return st; };
+  /** 几个包的状态 → 这个音色的状态。 */
+  function summarize(v: VoiceDef, packs: PackStatus[]): VoiceStatus {
+    const ready = (slugs: readonly string[]) => slugs.every((s) => packs.find((p) => p.slug === s)?.ready === true);
+    const st: VoiceStatus = {
+      voice: v.id,
+      ready: packs.every((p) => p.ready),
+      langs: ready(v.packs) ? voiceLangs(v).filter((l) => ready(v.langPacks[l] ?? [])) : [],
+      bytesCached: packs.reduce((a, p) => a + p.bytesCached, 0),
+      bytesTotal: packs.reduce((a, p) => a + p.bytesTotal, 0),
+      packs,
+    };
+    known.set(v.id, st);
+    return st;
+  }
+  const status = (voice: string) => call<PackStatus[]>((v) => ({ op: "status", slugs: voicePacks(v) }), voice).then((packs) => summarize(deps.voices[voice]!, packs));
 
   return {
-    status: (slug) => call<PackStatus>(slug, { op: "status", slug }).then(note),
-    download: (slug, base, onProgress) => call<PackStatus>(slug, { op: "download", slug, base }, onProgress).then(note),
-    importFiles: (slug, files, onProgress) => call<PackStatus>(slug, { op: "import", slug, files }, onProgress).then(note),
-    delete: (slug) => call<void>(slug, { op: "delete", slug }).then(() => { knownReady.set(slug, false); if (loadedSlug === slug) loadedSlug = null; }),
-    load(slug) {
-      let engine: string;
-      try { engine = engineOf(slug); } catch (e) { return Promise.reject(e instanceof Error ? e : new Error(String(e))); }
-      for (const other of [...channels.keys()]) if (other !== engine) closeChannel(other, "switched to a voice pack of another engine");
-      return call<LoadResult>(slug, { op: "load", slug }).then((r) => { loadedSlug = slug; return r; });
+    status,
+    download: (voice, base, opts) => call<PackStatus[]>((v) => ({ op: "download", slugs: voicePacks(v, opts?.langs), base }), voice, opts?.onProgress).then(() => status(voice)),
+    importFiles: (voice, files, onProgress) => call<PackStatus[]>((v) => ({ op: "import", slugs: voicePacks(v), files }), voice, onProgress)
+      .then(() => status(voice), (e) => status(voice).then(() => { throw e; }, () => { throw e; })),   // 部分认领成功也要把账记对
+    async delete(voice) {
+      const v = voiceOf(voice);
+      const ch = channel(v.engine);
+      // 别的音色里「装着的」（必装包都在）还要用的包留着；没装的音色不占着共用包不放。
+      const others = Object.values(deps.voices).filter((o) => o.id !== v.id);
+      const all = [...new Set(others.flatMap((o) => voicePacks(o)))].filter((s) => deps.packs[s]);
+      const st = all.length ? await send<PackStatus[]>(ch, { op: "status", slugs: all }) : [];
+      const ready = (s: string) => st.find((p) => p.slug === s)?.ready === true;
+      const keep = new Set<string>();
+      for (const o of others) {
+        if (!o.packs.every(ready)) continue;
+        for (const s of o.packs) keep.add(s);
+        for (const l of voiceLangs(o)) { const lp = o.langPacks[l] ?? []; if (lp.every(ready)) for (const s of lp) keep.add(s); }
+      }
+      await send<void>(ch, { op: "delete", slugs: voicePacks(v).filter((s) => !keep.has(s)) });
+      if (current?.voice === voice) current = null;
+      await status(voice);
     },
-    loaded: () => loadedSlug,
-    isKnownReady: (slug) => knownReady.get(slug),
-    synth(text: string, o: { lang: SpeechLang; voice?: number; speed?: number }) {
-      if (!loadedSlug) return Promise.reject(new Error("no voice pack loaded"));
-      return call<Clip>(loadedSlug, { op: "synth", text, lang: o.lang, voice: o.voice ?? 0, speed: o.speed ?? 1 });
+    async load(voice, opts) {
+      const v = voiceOf(voice);
+      const st = await status(voice);
+      const langs = (opts?.langs ?? voiceLangs(v)).filter((l) => st.langs.includes(l));
+      if (!langs.length) throw new Error("pack-missing");
+      for (const other of [...channels.keys()]) if (other !== v.engine) closeChannel(other, "switched to a voice of another engine");
+      const slugs = voicePacks(v, langs);
+      const r = await send<WorkerLoadResult>(channel(v.engine), { op: "load", engine: v.engine, key: `${voice}|${slugs.join(",")}`, slugs });
+      const got = r.langs ? langs.filter((l) => r.langs!.includes(l)) : langs;
+      current = { voice, langs: got };
+      return { voice, langs: got, alreadyLoaded: r.alreadyLoaded, createMs: r.createMs, sampleRate: r.sampleRate, speakers: r.speakers };
     },
-    dispose() { for (const engine of [...channels.keys()]) closeChannel(engine, "read-aloud engine disposed"); loadedSlug = null; },
+    loaded: () => (current ? { voice: current.voice, langs: [...current.langs] } : null),
+    isKnownReady(voice, lang) { const st = known.get(voice); return st ? (lang ? st.langs.includes(lang) : st.langs.length > 0) : undefined; },
+    synth(text: string, o: { lang: SpeechLang; speaker?: number; speed?: number }) {
+      if (!current) return Promise.reject(new Error("no voice loaded"));
+      return call<Clip>(() => ({ op: "synth", text, lang: o.lang, speaker: o.speaker ?? 0, speed: o.speed ?? 1 }), current.voice);
+    },
+    dispose() { for (const engine of [...channels.keys()]) closeChannel(engine, "read-aloud engine disposed"); current = null; },
   };
 }

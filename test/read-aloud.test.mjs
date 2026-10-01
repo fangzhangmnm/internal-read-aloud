@@ -9,7 +9,7 @@ function rig(opts = {}) {
   const engine = {
     synth(text, o) {
       log.push(`synth:${text}`);
-      return new Promise((resolve, reject) => pendingSynth.push({ text, o, resolve: () => resolve({ samples: new Float32Array(1), sampleRate: 1, text }), reject }));
+      return new Promise((resolve, reject) => pendingSynth.push({ text, o, resolve: (n = 1) => resolve({ samples: new Float32Array(n), sampleRate: 1, text }), reject }));
     },
   };
   const sink = {
@@ -119,6 +119,20 @@ describe("createReadAloud", () => {
     eq(r.ra.state(), "idle");
     assert(r.events.includes("error:boom"), r.events.join(","));
     eq(r.log.filter((x) => x.startsWith("play:")).length, 0);
+  });
+  it("合成回来是空的一段（这句没有可念的）：连读悄悄跳过、不报位置、不留停顿；点名只读它 → 回 idle", async () => {
+    const r = rig();
+    r.ra.start("甲。乙。丙。", 0);
+    r.pendingSynth.shift().resolve(); await r.settle(); await r.finishPlay();   // 甲 播完
+    r.pendingSynth.shift().resolve(0); await r.settle();                          // 乙 是空的
+    await r.synthAll(); await r.finishPlay();
+    eq(r.log.filter((x) => x.startsWith("play:")).join(","), "play:甲。,play:丙。");
+    eq(r.events.filter((e) => e.startsWith("sentence:")).join(","), "sentence:0,sentence:2");
+    eq(r.events[r.events.length - 1], "end");
+    const r2 = rig();
+    r2.ra.start("甲。", 0, { once: true });
+    r2.pendingSynth.shift().resolve(0); await r2.settle();
+    eq(r2.ra.state(), "idle"); eq(r2.playbacks.length, 0);
   });
   it("没有能读的句子：连读直接发 end；语言没给就按文本猜", async () => {
     const r = rig();

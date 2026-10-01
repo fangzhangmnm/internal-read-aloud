@@ -11,7 +11,7 @@ export interface PackChunk { name: string; bytes: number; sha256: string }
 /** 模型仓 manifest.json 的形状（本库用到的部分；别的字段原样带着）。 */
 export interface PackManifest {
   v: number; slug: string; name: string; task: string; lang: string[];
-  /** 哪个后端来跑：现在只有 "sherpa-onnx"。 */
+  /** 这个包是给哪个引擎用的（说明用；真正决定用哪个 worker 的是音色定义里的 engine）。 */
   engine: string;
   engineConfig: Record<string, unknown>;
   files: PackFile[]; chunkBytes: number; chunks: PackChunk[]; totalBytes: number; sha256: string;
@@ -20,6 +20,44 @@ export interface PackManifest {
 }
 /** 宿主内嵌进 bundle 的一个包：packId 是信任根。 */
 export interface EmbeddedPack { packId: string; manifest: PackManifest }
+
+/**
+ * 一个音色 = 一份音色定义：它由哪几个包组成、谁来跑、能念什么、要显示什么署名。
+ * 模型仓 `voices/<id>.json` 就是这个形状；宿主 build 时把它和它点名的每个包的清单一起内嵌。
+ * 拆成几个包是为了让别的音色、别的 app 能共用其中一些（运行时、某种语言的词典），也为了只下用得上的语言。
+ */
+export interface VoiceDef {
+  v: number;
+  id: string;
+  /** 给人看的名字（宿主可以用自己的文案盖掉）。 */
+  name: string;
+  /** 哪个后端来跑：门面按它找 worker（"piper-plus" / "sherpa-onnx" …）。 */
+  engine: string;
+  /** 一定要有的包（权重、运行时）。 */
+  packs: string[];
+  /** 每种语言另外要的包。**键 = 这个音色能念的语言**；不需要额外包的语言写空数组。 */
+  langPacks: Partial<Record<SpeechLang, string[]>>;
+  /** 每个包的 packId（模型仓那头写的，宿主 build 时拿来对账；运行时的信任根是内嵌清单自己的 packId）。 */
+  packIds?: Record<string, string>;
+  /** 说话人：id = 引擎里的编号。不写 = 只有 0 号。 */
+  speakers?: { id: number; name: string }[];
+  /** 必须显示在界面上的署名（原文，库不翻译）。 */
+  credit?: string;
+  /** 必须让用户看到的使用条款（原文）。 */
+  terms?: string;
+  termsUrl?: string;
+  /** 其余出处（一行一条）。 */
+  attribution?: string[];
+  notes?: string;
+}
+/** 这个音色能念的语言。 */
+export function voiceLangs(v: VoiceDef): SpeechLang[] { return Object.keys(v.langPacks) as SpeechLang[]; }
+/** 这个音色要用到的包（去重，顺序稳定）：必装的 + 点名那几种语言的；不点名 = 全部语言。 */
+export function voicePacks(v: VoiceDef, langs?: readonly SpeechLang[]): string[] {
+  const out = [...v.packs];
+  for (const l of langs ?? voiceLangs(v)) for (const s of v.langPacks[l] ?? []) out.push(s);
+  return [...new Set(out)];
+}
 
 /** 朗读包在 engineConfig 里的约定（sherpa-onnx 离线 TTS）。文件名都是包内相对名。 */
 export interface SherpaTtsEngineConfig {

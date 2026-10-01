@@ -1,7 +1,7 @@
 // 语音包纯函数 + SHA-256 的规格测试。created 2026-10-01 by Claude Fable 5.1
 import { createHash } from "node:crypto";
 import { describe, it, eq, assert } from "./runner.mjs";
-import { assembleFiles, resolvePackPaths, logicalName } from "../src/packs.ts";
+import { assembleFiles, resolvePackPaths, logicalName, voicePacks, voiceLangs } from "../src/packs.ts";
 import { Sha256, sha256Hex } from "../src/sha256.ts";
 
 /** 造一个小包：三个文件拼起来按 chunkBytes 切。 */
@@ -42,6 +42,17 @@ describe("packs/resolvePackPaths", () => {
     eq(out.ruleFsts, "/packs/x/a.fst,/packs/x/b.fst");
     eq(out.mixed, "a.fst,nope.fst", "partly-unknown list is left alone");
     eq(cfg.m.model, "model.onnx", "input untouched");
+  });
+});
+
+describe("packs/voicePacks", () => {
+  const v = { v: 1, id: "x", name: "x", engine: "e", packs: ["voice-x", "runtime-r"], langPacks: { ja: ["lang-ja"], en: ["lang-en"], zh: [] } };
+  it("能念的语言 = langPacks 的键（不要额外包的语言也算）", () => { eq(voiceLangs(v).join(","), "ja,en,zh"); });
+  it("不点名 = 必装的 + 全部语言的；点名 = 必装的 + 那几种的；去重、必装的在前", () => {
+    eq(voicePacks(v).join(","), "voice-x,runtime-r,lang-ja,lang-en");
+    eq(voicePacks(v, ["en"]).join(","), "voice-x,runtime-r,lang-en");
+    eq(voicePacks(v, ["zh"]).join(","), "voice-x,runtime-r");
+    eq(voicePacks({ ...v, langPacks: { ja: ["shared", "lang-ja"], en: ["shared"] } }).join(","), "voice-x,runtime-r,shared,lang-ja");
   });
 });
 

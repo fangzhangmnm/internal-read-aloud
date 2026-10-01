@@ -14,14 +14,15 @@ import { splitSentences, sentenceAt, detectLang, type SentenceSpan, type SpeechL
 /** 一段合成好的声音。 */
 export interface Clip { samples: Float32Array; sampleRate: number }
 /** 控制器向引擎要的唯一一件事。 */
-export interface Synthesizer { synth(text: string, opts: { lang: SpeechLang; voice?: number; speed?: number }): Promise<Clip> }
+/** speaker = 一个模型里有几个说话人时的编号（缺省 0）。没有可念的内容（只有标点）→ 长度 0 的一段，控制器跳过这一句。 */
+export interface Synthesizer { synth(text: string, opts: { lang: SpeechLang; speaker?: number; speed?: number }): Promise<Clip> }
 /** 正在播的一段：done 在播完或被 stop 时兑现（true = 自然播完，false = 被停）。 */
 export interface Playback { done: Promise<boolean>; stop(): void; pause(): void; resume(): void }
 /** 喇叭：给一段声音，开始播。 */
 export interface AudioSink { play(clip: Clip): Playback }
 
 export type ReadAloudState = "idle" | "loading" | "playing" | "paused";
-export interface ReadAloudOptions { lang?: SpeechLang; voice?: number; speed?: number; once?: boolean }
+export interface ReadAloudOptions { lang?: SpeechLang; speaker?: number; speed?: number; once?: boolean }
 export interface ReadAloudDeps {
   engine: Synthesizer;
   sink: AudioSink;
@@ -77,7 +78,7 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
     if (!p) {
       const sp = spans[i]!;
       const mine = clips, got = ready;
-      p = deps.engine.synth(text.slice(sp.start, sp.end), { lang, voice: opts.voice, speed: opts.speed });
+      p = deps.engine.synth(text.slice(sp.start, sp.end), { lang, speaker: opts.speaker, speed: opts.speed });
       p.then((c) => { if (mine === clips && mine.get(i) === p) got.set(i, c); }, () => { if (mine.get(i) === p) mine.delete(i); });   // 失败的不留：下次再点重算
       clips.set(i, p);
     }
@@ -100,6 +101,10 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
         if (!hit) setState("loading");
         const clip = hit ?? await clipP;
         if (my !== gen) return;
+        if (!clip.samples.length) {   // 这一句没有可念的（「……」「——」）：连读时悄悄跳过；点名只读它 → 当作读完
+          if (!continuous) { setState("idle"); return; }
+          continue;
+        }
         emit("sentence", spans[i]!, i);
         setState("playing");
         playing = deps.sink.play(clip);
@@ -124,7 +129,7 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
     start(t, from, o = {}) {
       halt();
       if (t !== text) { text = t; spans = splitSentences(t); dropClips(); }
-      else if (o.voice !== opts.voice || o.speed !== opts.speed || (o.lang ?? lang) !== lang) dropClips();   // 换了音色 / 语速 / 语言：旧的合成结果不能用
+      else if (o.speaker !== opts.speaker || o.speed !== opts.speed || (o.lang ?? lang) !== lang) dropClips();   // 换了音色 / 语速 / 语言：旧的合成结果不能用
       opts = o; lang = o.lang ?? detectLang(t); continuous = !o.once;
       const i = sentenceAt(spans, from);
       if (i < 0) { index = -1; setState("idle"); if (continuous) emit("end"); return; }
