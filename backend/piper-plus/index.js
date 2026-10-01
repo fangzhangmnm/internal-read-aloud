@@ -22,7 +22,7 @@ import { createEnglishG2p } from "./en-g2p.js";
 import { createChineseG2p } from "./zh-g2p.js";
 import { encodeTokens, segmentText } from "./encode.js";
 import { createVits } from "./vits.js";
-import { splitClauses, endsStrong, normalizeZhNumbers } from "./text.js";
+import { splitClauses, endsStrong, endsDash, normalizeZhNumbers } from "./text.js";
 
 /** Names the backend looks up in `ctx.files`. A language is offered only when ALL of its files are present. */
 const FILES = Object.freeze({
@@ -32,7 +32,7 @@ const FILES = Object.freeze({
   zh: ["zh/pinyin_single.tone3.json", "zh/pinyin_phrases.tone3.json"],
 });
 const SCALES = Object.freeze({ noiseScale: 0.667, lengthScale: 1.5, noiseW: 0.5 });   // model README; config.json's 1.0 / 0.8 is the "rushed" setting
-const CLAUSE_SILENCE_MS = 250, STRONG_SILENCE_MS = 400, MIN_CLAUSE_CHARS = { en: 20, zh: 5 };   // pause after a comma-like break / after a sentence-final mark inside the span
+const CLAUSE_SILENCE_MS = 250, DASH_SILENCE_MS = 350, STRONG_SILENCE_MS = 400, MIN_CLAUSE_CHARS = { en: 20, zh: 5 };   // pause after a comma-like break / after a sentence-final mark inside the span
 
 const bytesOf = (files, name) => { const v = files.get(name); if (v === undefined) throw new Error(`piper-plus backend: "${name}" is missing from ctx.files`); return v instanceof Uint8Array ? v : new Uint8Array(v); };
 const jsonOf = (files, name) => JSON.parse(new TextDecoder().decode(bytesOf(files, name)));
@@ -133,7 +133,7 @@ export function createPiperPlusBackend() {
         if (ids.length <= 3) continue;   // BOS, pad, EOS only: nothing pronounceable (punctuation, unknown symbols)
         const r = await state.vits.synthIds(ids, pros, lang, scales);
         clips.push(r.samples);
-        gaps.push(Math.round(((endsStrong(piece) ? STRONG_SILENCE_MS : CLAUSE_SILENCE_MS) / 1000) * sr));
+        gaps.push(Math.round(((endsStrong(piece) ? STRONG_SILENCE_MS : endsDash(piece) ? DASH_SILENCE_MS : CLAUSE_SILENCE_MS) / 1000) * sr));
         if (o.__debug) debug.push({ text: piece, ...r.inputs });
       }
       const total = clips.reduce((a, c) => a + c.length, 0) + gaps.slice(0, -1).reduce((a, g) => a + g, 0);

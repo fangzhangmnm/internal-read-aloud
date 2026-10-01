@@ -49,6 +49,36 @@ describe("splitSentences", () => {
   it("空串 / 纯空白 → 没有句子", () => { same(cut(""), []); same(cut(" \n　\n"), []); });
 });
 
+describe("splitSentences：公式 / 代码的护栏", () => {
+  it("围栏代码块整块不算句子（不念、不切碎），前后的正文照常", () => {
+    same(cut("先看代码。\n```js\nfor (let i = 0; i < n; i++) { a[i] = b[i] ? 1 : 0; }\nconsole.log(\"done!\");\n```\n看完了。"), ["先看代码。", "看完了。"]);
+  });
+  it("公式块：$$…$$（跨行）、\\[…\\]、\\begin…\\end 整块不算句子", () => {
+    same(cut("由此可得\n$$\n\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}\n$$\n证毕。"), ["由此可得", "证毕。"]);
+    same(cut("设\n\\[ a^2 + b^2 = c^2 \\]\n成立。"), ["设", "成立。"]);
+    same(cut("如下：\n\\begin{align}\nx &= 1 \\\\\ny &= 2\n\\end{align}\n完。"), ["如下：", "完。"]);
+    same(cut("一行写完的 $$E = mc^2$$ 也整行跳过\n下一行。"), ["下一行。"]);
+  });
+  it("符号密度很高的行（没有围栏的代码 / 公式）不算句子；带几个符号的正文照常念", () => {
+    same(cut("for (let i = 0; i < n; i++) { a[i] = b[i] + c; }\n这是正文。"), ["这是正文。"]);
+    same(cut("x = \\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}\n解出来了。"), ["解出来了。"]);
+    same(cut("质能方程 E = mc^2 很有名。"), ["质能方程 E = mc^2 很有名。"]);
+    same(cut("【系统】HP+5，MP+3；获得[铁剑]*2。"), ["【系统】HP+5，MP+3；获得[铁剑]*2。"]);
+    same(cut("He paid 50% up front; the rest (about $300) came later."), ["He paid 50% up front; the rest (about $300) came later."]);
+  });
+  it("行内公式 / 行内代码：里面的标点不断句，句子照常在它后面的句末断", () => {
+    same(cut("已知 $f(x) = x^2 + 1$。那么 $f(2) = 5$！对吗？"), ["已知 $f(x) = x^2 + 1$。", "那么 $f(2) = 5$！", "对吗？"]);
+    same(cut("调用 `a ? b : c` 即可。然后 `x!.y` 也行。"), ["调用 `a ? b : c` 即可。", "然后 `x!.y` 也行。"]);
+    same(cut("Use `foo.bar()` now. Then \\(a! b?\\) holds. Done."), ["Use `foo.bar()` now.", "Then \\(a! b?\\) holds.", "Done."]);
+    same(cut("It costs $5. Then $10 more."), ["It costs $5.", "Then $10 more."]);
+  });
+  it("超长兜底不会切在行内公式中间", () => {
+    const f = "$" + "a+b,".repeat(60) + "c$";   // 242 个字符的行内公式，里面全是逗号
+    const parts = cut("前面的话，" + f + "后面的话。");
+    assert(parts.some((p) => p.includes(f)), "inline formula must stay in one piece: " + JSON.stringify(parts.map((p) => p.length)));
+  });
+});
+
 describe("sentenceAt", () => {
   it("句内 → 那一句；两句之间 → 后一句；过了末尾 → 最后一句；空 → -1", () => {
     const t = "甲乙。 丙丁。\n戊。";
