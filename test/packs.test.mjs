@@ -65,3 +65,24 @@ describe("sha256", () => {
     eq(h.hex(), createHash("sha256").update(buf).digest("hex"));
   });
 });
+
+// 模型仓里真的音色定义必须过库的类型（0.1.0 漏了 createdAt / createdBy，宿主的 tsc 才发现）。created 2026-10-01 by Claude Fable 5.1
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath as toPath } from "node:url";
+describe("packs/VoiceDef 对账", () => {
+  it("模型仓 voices/*.json 逐个当成 VoiceDef 过 tsc（多余字段也报错）", () => {
+    const lib = toPath(new URL("..", import.meta.url));
+    const vdir = toPath(new URL("../../20260903 PWA Models/voices/", import.meta.url));
+    if (!existsSync(vdir)) return;   // 模型仓不在这台机子上：跳过
+    const tmp = lib + "node_modules/.voice-typecheck/"; rmSync(tmp, { recursive: true, force: true }); mkdirSync(tmp, { recursive: true });
+    const defs = readdirSync(vdir).filter((n) => n.endsWith(".json")).map((n) => readFileSync(vdir + n, "utf8"));
+    assert(defs.length > 0, "no voice definitions found");
+    writeFileSync(tmp + "check.ts", `import type { VoiceDef } from "../../src/packs.ts";\n` + defs.map((d, i) => `export const v${i}: VoiceDef = ${d};`).join("\n"));
+    writeFileSync(tmp + "tsconfig.json", JSON.stringify({ compilerOptions: { target: "es2022", module: "esnext", moduleResolution: "bundler", allowImportingTsExtensions: true, noEmit: true, strict: true, skipLibCheck: true, types: [] }, include: ["check.ts"] }));
+    let out = "";
+    try { execFileSync(lib + "node_modules/.bin/tsc", ["-p", tmp + "tsconfig.json"], { encoding: "utf8" }); } catch (e) { out = String(e.stdout || e.message); }
+    rmSync(tmp, { recursive: true, force: true });
+    eq(out.trim(), "");
+  });
+});

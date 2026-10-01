@@ -288,6 +288,9 @@ export declare interface VoiceDef {
     /** 其余出处（一行一条）。 */
     attribution?: string[];
     notes?: string;
+    /** 打包时写的出处（哪天、谁打的）。 */
+    createdAt?: string;
+    createdBy?: string;
 }
 
 /** 这个音色能念的语言。 */

@@ -296,6 +296,9 @@ export interface Synthesizer {
 // @public
 export interface VoiceDef {
     attribution?: string[];
+    createdAt?: string;
+    // (undocumented)
+    createdBy?: string;
     credit?: string;
     engine: string;
     // (undocumented)

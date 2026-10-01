@@ -16,7 +16,7 @@
 - **后端可换**：`src/worker/backend.ts` 是一种引擎一个后端的形状。现有两个：`piper-plus.ts`（接 `backend/piper-plus/`，つくよみちゃん用；user 2026-10-01「先用她来兜底，以后慢慢加」）和 `sherpa.ts`（家族已 vendor 的 sherpa-onnx WASM，留给以后加别的音色）。**`backend/piper-plus/` 的 JS 逐字来自排查现场 `~/jupyter/third-party/piper-plus/backend/`**（证明它和电脑参考实现喂给模型的东西逐符号相同的测试都在那边）：改算法先在那边改、跑那边的对照测试，再拷过来。
 - **句间停顿归控制器**（同段 600 ms、跨段 900 ms，可配；600 = piper-plus 参考实现的句间静音。句内逗号处的停顿归后端）：合成出来的一句首尾几乎没有静音，不留气口听着就是「不喘气」。
 - **两处逐字拷贝，记账**：`src/sha256.ts` 和 worker 里「下载 / 校验 / 缓存」那一半来自 WebXiaoHeiWu `src/asr/`。WXHW 的识别这轮不动；等本库稳定后让它改吃本库，两份才合一。改算法 = 两边一起改。
-- **版本纪律同其他内部库**：现行 `0.1.0`（2026-10-01 首发，user「库发0.1.0」）；**之后每次 bump minor 都要先找 user 批**（patch AI 看着办）；收货脚本只认打过 tag 的已发版。发版 = 写版本号 → `bash scripts/release.sh` → commit → tag `v<版本>`。本库现在没有远端，宿主收货走本机的 release 产物。
+- **版本纪律同其他内部库**：现行 `0.1.1`（0.1.0 = 2026-10-01 首发，user「库发0.1.0」；0.1.1 = 同日补丁：`VoiceDef` 补上模型仓音色定义里实际有的 `createdAt` / `createdBy`）；**之后每次 bump minor 都要先找 user 批**（patch AI 看着办）；收货脚本只认打过 tag 的已发版。发版 = 写版本号 → `bash scripts/release.sh` → commit → tag `v<版本>`。本库现在没有远端，宿主收货走本机的 release 产物。
 - **开发期往宿主里装包只许用 `scripts/dev-install.sh`**（逐字节验货，拒绝往宿主的 main 上装）。
 - **只出货不送货**：本库的活到 commit 交付物为止；宿主收货、跑宿主测试、宿主发版是宿主 session 的活。
 - 测试两档：`npm test`（node：分句 / 控制器 / 包的纯函数 / 红线守卫）+ `npm run e2e`（构建后在无头 Chromium 里走整链：两种真引擎 + 真语音包 + 真 Cache + 真 Web Audio，约一分钟；包在检疫桶：sherpa 测试包 `~/jupyter/third-party/sherpa-onnx-wasm/tts-probe/packs-test/`，つくよみちゃん五个小包 `~/jupyter/third-party/piper-plus/packs-local/`，由 `…/piper-plus/backend/build-packs.mjs` 打）。构建 + 户口 `npm run build`（`api/` 是生成物，勿手改）。
