@@ -11,6 +11,8 @@ function rig(opts = {}) {
       log.push(`synth:${text}`);
       return new Promise((resolve, reject) => pendingSynth.push({ text, o, resolve: (n = 1) => resolve({ samples: new Float32Array(n), sampleRate: 1, text }), reject }));
     },
+    // 同真门面：排着没算的以 "cancelled" 拒绝
+    cancelPending() { log.push("cancel"); for (const p of pendingSynth.splice(0)) p.reject(new Error("cancelled")); },
   };
   const sink = {
     play(clip) {
@@ -146,6 +148,18 @@ describe("createReadAloud", () => {
     r.ra.start(TEXT, 0, { once: true }); eq(r.pendingSynth[0].o.preset, undefined); await r.synthAll();
     r.ra.start(TEXT, 0, { once: true, preset: Number.NaN }); eq(r.pendingSynth.length, 0, "NaN = not given");
     r.ra.start(TEXT, 0, { once: true, preset: 0 }); eq(r.pendingSynth.length, 1, "0 is a preset, not 'not given'"); eq(r.pendingSynth[0].o.preset, 0);
+  });
+  it("换了选项（预设 / 语速 …）作废已合成的句子时，排着没算的合成一起扔掉；被扔掉的不报错（user「ipad上调多了preset会不出声」）", async () => {
+    const r = rig();
+    r.ra.start(TEXT, 0, { preset: 1 }); await r.settle();
+    eq(r.pendingSynth.length, 3, "this sentence + lookahead 2 queued");
+    for (let k = 2; k <= 6; k++) { r.ra.start(TEXT, 0, { preset: k }); await r.settle(); }
+    eq(r.log.filter((x) => x === "cancel").length, 5, "one cancel per option change");
+    eq(r.pendingSynth.length, 3, "only the latest round is queued");
+    eq(r.pendingSynth[0].o.preset, 6);
+    assert(!r.events.some((e) => e.startsWith("error:")), "cancelled requests are not errors: " + r.events.join(","));
+    r.ra.start(TEXT, 1, { preset: 6 }); await r.settle();
+    eq(r.log.filter((x) => x === "cancel").length, 5, "same options, other sentence: nothing cancelled (the lookahead is still useful)");
   });
   it("句间停顿跟着语速等比例缩：1.5 倍速 → 400 / 600 / 400", async () => {
     const r = rig();

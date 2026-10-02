@@ -276,6 +276,7 @@ export interface SherpaTtsEngineConfig {
 
 // @public (undocumented)
 export interface SpeechEngine extends Synthesizer {
+    cancelPending(): void;
     delete(voice: string): Promise<void>;
     dispose(): void;
     download(voice: string, base: string, opts?: {
@@ -317,6 +318,7 @@ export function splitSentences(text: string): SentenceSpan[];
 
 // @public
 export interface Synthesizer {
+    cancelPending?(): void;
     // (undocumented)
     synth(text: string, opts: {
         lang: SpeechLang;

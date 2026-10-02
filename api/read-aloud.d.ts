@@ -278,6 +278,8 @@ export declare interface SpeechEngine extends Synthesizer {
     isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
     /** 关掉所有 worker，归还内存（WASM 堆只涨不缩，这是唯一的归还办法）。之后再用会重新起。 */
     dispose(): void;
+    /** 扔掉排着还没开始算的合成请求（以 "cancelled" 拒绝）；正在算的那一个算完为止。 */
+    cancelPending(): void;
 }
 
 export declare interface SpeechEngineDeps {
@@ -309,6 +311,8 @@ export declare interface Synthesizer {
         whole?: boolean;
         preset?: number;
     }): Promise<Clip>;
+    /** 扔掉排着还没开始算的合成请求（它们的 promise 以 "cancelled" 拒绝）。控制器作废已合成的句子时调；不实现 = 排着的照算。 */
+    cancelPending?(): void;
 }
 
 /**

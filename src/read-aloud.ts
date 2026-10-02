@@ -21,7 +21,11 @@ import { contextLang, langRuns, type LangRun } from "./lang-route.ts";
 export interface Clip { samples: Float32Array; sampleRate: number }
 /** 控制器向引擎要的唯一一件事。 */
 /** speaker = 一个模型里有几个说话人时的编号（缺省 0）。没有可念的内容（只有标点）→ 长度 0 的一段，控制器跳过这一句。 */
-export interface Synthesizer { synth(text: string, opts: { lang: SpeechLang; speaker?: number; speed?: number; steadiness?: number; whole?: boolean; preset?: number }): Promise<Clip> }
+export interface Synthesizer {
+  synth(text: string, opts: { lang: SpeechLang; speaker?: number; speed?: number; steadiness?: number; whole?: boolean; preset?: number }): Promise<Clip>;
+  /** 扔掉排着还没开始算的合成请求（它们的 promise 以 "cancelled" 拒绝）。控制器作废已合成的句子时调；不实现 = 排着的照算。 */
+  cancelPending?(): void;
+}
 /** 正在播的一段：done 在播完或被 stop 时兑现（true = 自然播完，false = 被停）。 */
 export interface Playback { done: Promise<boolean>; stop(): void; pause(): void; resume(): void }
 /** 喇叭：给一段声音，开始播。 */
@@ -149,7 +153,11 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
   }
   /** 只留当前句前一句到提前量之内的；别的放掉（一句几百 KB）。 */
   function prune(i: number): void { for (const k of [...clips.keys()]) if (k < i - 1 || k > i + lookahead) { clips.delete(k); ready.delete(k); } }
-  function dropClips(): void { clips = new Map(); ready = new Map(); }
+  /**
+   * 作废已合成的句子（换了选项 / 换了文本）。排着还没算的合成也一起扔掉（user 2026-10-02「ipad上调多了preset会不出声」：连着改预设，
+   * 每改一次就把这一句和提前量的几句重新排进引擎，作废的请求照样一个个算完，最新那一句排在一长串后面，慢的设备上听着就是没声）。
+   */
+  function dropClips(): void { const had = clips.size > 0; clips = new Map(); ready = new Map(); if (had) deps.engine.cancelPending?.(); }
   /** 两句之间有没有隔着换行（= 跨段）。 */
   const crossesParagraph = (a: number, b: number) => text.slice(spans[a]!.end, spans[b]!.start).includes("\n");
 

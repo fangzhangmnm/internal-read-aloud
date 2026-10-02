@@ -56,6 +56,8 @@ export interface SpeechEngine extends Synthesizer {
   isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
   /** 关掉所有 worker，归还内存（WASM 堆只涨不缩，这是唯一的归还办法）。之后再用会重新起。 */
   dispose(): void;
+  /** 扔掉排着还没开始算的合成请求（以 "cancelled" 拒绝）；正在算的那一个算完为止。 */
+  cancelPending(): void;
 }
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void; onProgress?: (p: PackProgress) => void };
@@ -68,6 +70,18 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
   const channels = new Map<string, Channel>();   // engine 名 → 活着的 worker
   let seq = 0;
   let current: { voice: string; langs: SpeechLang[]; override: string[]; preset: boolean } | null = null;
+  // 合成请求在这里排队、一次只给 worker 一个（worker 本来就一个一个算）：这样没开始的能扔掉（cancelPending）
+  const synthQueue: { make: () => Promise<Clip>; resolve: (c: Clip) => void; reject: (e: Error) => void }[] = [];
+  let synthBusy = false;
+  function pumpSynth(): void {
+    if (synthBusy) return;
+    const job = synthQueue.shift(); if (!job) return;
+    synthBusy = true;
+    let p: Promise<Clip>;
+    try { p = job.make(); } catch (e) { p = Promise.reject(asError(e)); }
+    p.then(job.resolve, job.reject).finally(() => { synthBusy = false; pumpSynth(); });
+  }
+  const cancelPending = () => { for (const j of synthQueue.splice(0)) j.reject(new Error("cancelled")); };
   const known = new Map<string, VoiceStatus>();
 
   function voiceOf(id: string): VoiceDef {
@@ -189,8 +203,12 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
     isKnownReady(voice, lang) { const st = known.get(voice); return st ? (lang ? st.langs.includes(lang) : st.langs.length > 0) : undefined; },
     synth(text: string, o: { lang: SpeechLang; speaker?: number; speed?: number; steadiness?: number; whole?: boolean; preset?: number }) {
       if (!current) return Promise.reject(new Error("no voice loaded"));
+      return new Promise<Clip>((resolve, reject) => { synthQueue.push({ make: () => {
+      if (!current) return Promise.reject(new Error("no voice loaded"));
       return call<Clip>(() => ({ op: "synth", text, lang: o.lang, speaker: o.speaker ?? 0, speed: o.speed ?? 1, steadiness: Math.min(1, Math.max(0, Number.isFinite(o.steadiness) ? o.steadiness! : 0)), whole: o.whole !== false, preset: Number.isFinite(o.preset) ? Math.trunc(o.preset!) : undefined }), current.voice);
+      }, resolve, reject }); pumpSynth(); });
     },
-    dispose() { for (const engine of [...channels.keys()]) closeChannel(engine, "read-aloud engine disposed"); current = null; },
+    cancelPending,
+    dispose() { cancelPending(); for (const engine of [...channels.keys()]) closeChannel(engine, "read-aloud engine disposed"); current = null; },
   };
 }
