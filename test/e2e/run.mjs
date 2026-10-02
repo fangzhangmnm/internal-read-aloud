@@ -21,7 +21,9 @@ const { chromium } = createRequire(join(FAMILY, "20260524 WeebPaint/package.json
 const ZH = "TEST-piper-zh-xiao-ya-int8", JA = "TEST-supertonic-3-int8";
 // つくよみちゃん（piper-plus 引擎）的五个小包 + 音色定义：检疫桶里本机打的，还没发布（~/jupyter/third-party/piper-plus/backend/build-packs.mjs）。
 const TSU = process.env.READ_ALOUD_TSU_PACKS ?? join(process.env.HOME, "jupyter/third-party/piper-plus/packs-local");
-const SAMPLES = process.env.READ_ALOUD_E2E_SAMPLES ?? "";   // 给了目录 = 把つくよみちゃん合成的几句存成 wav（给人听 / 给识别回环用）
+const SAMPLES = process.env.READ_ALOUD_E2E_SAMPLES ?? "";
+// 本地模型测试用的权重（检疫桶）：原版月读 + 「换回中文语言向量」的实验权重（~/jupyter/third-party/piper-plus/langemb-exp/NOTES.md）
+const LOCAL = process.env.READ_ALOUD_LOCAL_MODELS ?? join(process.env.HOME, "jupyter/third-party/piper-plus/work");   // 给了目录 = 把つくよみちゃん合成的几句存成 wav（给人听 / 给识别回环用）
 for (const [what, p] of [["engine wasm", ENGINE_WASM], ["engine tts js", ENGINE_TTS_JS], ["test packs", join(PACKS, ZH)], ["tsukuyomi packs", join(TSU, "voices/tsukuyomi-chan.json")], ["esbuild", ESBUILD ?? ""]]) if (!p || !existsSync(p)) { console.error(`[e2e] missing ${what}: ${p}`); process.exit(2); }
 
 await mkdir(join(HERE, ".out"), { recursive: true });
@@ -38,6 +40,7 @@ const srv = http.createServer(async (req, res) => {
     if (p.startsWith("/engine/")) { const n = p.slice(8); file = n === "sherpa-onnx-tts.js" ? join(ENGINE_TTS_JS, n) : join(ENGINE_WASM, n); }
     else if (p.startsWith("/models/")) file = join(PACKS, p.slice("/models/packs/".length));
     else if (p.startsWith("/tsu/")) file = join(TSU, p.slice("/tsu/".length));
+    else if (p.startsWith("/local/")) file = join(LOCAL, p.slice("/local/".length));
     else if (p.startsWith("/tsu-tampered/")) { file = join(TSU, p.slice("/tsu-tampered/".length)); corrupt = /chunk-\d+$/.test(p); }
     else if (p.startsWith("/tampered/")) { file = join(PACKS, p.slice("/tampered/packs/".length)); corrupt = /chunk-\d+$/.test(p); }
     else file = join(HERE, p === "/" ? "page.html" : p);
@@ -61,7 +64,7 @@ try {
   await page.goto(ORIGIN + "/"); await page.waitForFunction("window.e2eReady === true", null, { timeout: 30000 });
 
   let requests = 0;   // 浏览器发的每一个请求（页面 + worker）
-  page.context().on("request", () => { requests++; });
+  page.context().on("request", (r) => { if (!new URL(r.url()).pathname.startsWith("/local/")) requests++; });   // /local/ = 测试页自己取「用户手里的本地模型文件」，不算引擎的请求
 
   const ZV = "zh-test", JV = "ja-test", TV = "tsukuyomi-chan", OV = "other-voice";
   const made = await page.evaluate(async ([ZH, JA]) => {
@@ -183,19 +186,54 @@ try {
   check("同样的再装一次 = 已经装着", again.alreadyLoaded === true);
   const ja = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { keep: "ja" }));
   check("日语一句：有声音、时长合理", ja.sec > 3 && ja.sec < 9 && ja.rms > 0.01, JSON.stringify(ja));
-  const zh = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { keep: "zh" }));
+  const zh = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { keep: "zh", whole: false }));
   check("中文一句：有声音、时长合理", zh.sec > 2 && zh.sec < 9 && zh.rms > 0.01, JSON.stringify(zh));
   const en2 = await page.evaluate(() => window.e2e.synth("The quick brown fox jumps over the lazy dog.", "en"));
   check("英语一句（全语言装载下）：时长和只装英语时同一量级（每一遍有随机差异，量到过 2.1–2.9 秒）", en2.sec > e1.sec * 0.55 && en2.sec < e1.sec * 1.8 && en2.rms > 0.01, `${en2.sec} vs ${e1.sec}`);
   const fast = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { speed: 1.25 }));
   check("语速 1.25：这一句变短（应是 0.8 倍左右；每一遍有随机差异，门槛放在 0.97）", fast.sec < ja.sec * 0.97, `${fast.sec} vs ${ja.sec}`);
-  const zhFast = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { speed: 1.5 }));
-  check("小句之间垫的静音跟着语速缩：1 倍速 250 ms，1.5 倍速 167 ms", Math.abs(zh.silenceMs - 250) <= 8 && Math.abs(zhFast.silenceMs - 167) <= 8, `${zh.silenceMs} / ${zhFast.silenceMs}`);
-  const st1 = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1 }));
-  const st2 = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1 }));
-  check("念法 steadiness 1：两遍一模一样长（时长没有随机），有声音", st1.sec === st2.sec && st1.rms > 0.01, `${st1.sec} / ${st2.sec}`);
+  const zhFast = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { speed: 1.5, whole: false }));
+  check("整句合成关：小句之间垫的静音跟着语速缩：1 倍速 250 ms，1.5 倍速 167 ms", Math.abs(zh.silenceMs - 250) <= 8 && Math.abs(zhFast.silenceMs - 167) <= 8, `${zh.silenceMs} / ${zhFast.silenceMs}`);
+  const st1 = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1, whole: false }));
+  const st2 = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1, whole: false }));
+  check("念法 steadiness 1（整句合成关）：两遍一模一样长（时长没有随机），有声音", st1.sec === st2.sec && st1.rms > 0.01, `${st1.sec} / ${st2.sec}`);
   const half = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 0.5 }));
   check("念法 steadiness 0.5：照常出声", half.sec > 1 && half.rms > 0.01, JSON.stringify(half));
+
+  // ── 整句合成（默认开；user 2026-10-02「加一个整句合成的选项，默认开，可以开关」）──
+  const S3 = "一个信使满头大汗，一边跑一边大喊：“好消息！坏消息！快来看啊！”";
+  const wOn = await page.evaluate((s) => window.e2e.synth(s, "zh", { steadiness: 1 }), S3);
+  const wOff = await page.evaluate((s) => window.e2e.synth(s, "zh", { steadiness: 1, whole: false }), S3);
+  // 念法 1 = 时长没有随机（noise_w 0），声音还有一点（noise_scale 0.333）：比时长，不比采样
+  check("整句合成（默认）：有声音，和逐段合成走的是两条路（念法 1 时长确定，两种做法的时长不一样）", wOn.sec > 2 && wOn.rms > 0.01 && wOn.sec !== wOff.sec, `${JSON.stringify(wOn)} / ${JSON.stringify(wOff)}`);
+  const wOn2 = await page.evaluate((s) => window.e2e.synth(s, "zh", { steadiness: 1 }), S3);
+  // 补多少静音看模型自己停得多安静，声音里还有一点随机（noise_scale 0.333）→ 每遍差几毫秒
+  check("整句合成：同样的输入两遍长度只差几毫秒（≤ 40 ms）", Math.abs(wOn2.sec - wOn.sec) <= 0.04, `${wOn2.sec} / ${wOn.sec}`);
+  const wPause = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1 }));
+  check("整句合成：逗号处的安静（模型自己的 + 补的）至少有 250 ms 左右", wPause.quietMs >= 230, JSON.stringify(wPause));
+  const wFast = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1, speed: 2 }));
+  check("整句合成：语速 2 时停顿跟着缩（安静段 ≥ 115 ms，且比 1 倍速短）", wFast.quietMs >= 110 && wFast.quietMs < wPause.quietMs, `${wFast.quietMs} / ${wPause.quietMs}`);
+  const wEn = await page.evaluate(() => window.e2e.synth("When the rain stopped, the children ran outside, laughing and shouting.", "en", { steadiness: 1 }));
+  check("整句合成：英语也走（有声音）", wEn.sec > 2 && wEn.rms > 0.01, JSON.stringify(wEn));
+
+  // ── 本地模型（user 2026-10-02「加一个本地上传的模型，这样我们改权重可以拖到网页上测试，而不用动远端」）──
+  const base1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
+  const same = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/model/tsukuyomi-chan-6lang-fp16.onnx" }), TV);
+  check("本地模型：换进一模一样的权重 → 重新装载、报出换了 model.onnx", !same.error && same.alreadyLoaded === false && same.override.join() === "model.onnx" && await page.evaluate(() => window.e2e.engine.loaded().override.join() === "model.onnx"), JSON.stringify(same));
+  const same1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
+  check("本地模型：一模一样的权重 → 一样长（念法 1 时长确定）", same1.sec === base1.sec, `${same1.sec} / ${base1.sec}`);
+  if (existsSync(join(LOCAL, "model-langemb/tsukuyomi-langemb-from-base.onnx"))) {
+    const alt = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/model-langemb/tsukuyomi-langemb-from-base.onnx" }), TV);
+    const alt1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
+    check("本地模型：换进改过的权重（换回中文语言向量）→ 时长变了（中文向量下念得慢）", !alt.error && alt1.rms > 0.01 && alt1.sec > base1.sec * 1.15, `${JSON.stringify(alt)} ${alt1.sec} / ${base1.sec}`);
+  } else console.log("  （检疫桶里没有换回中文向量的实验权重，跳过「输出变了」那一条）");
+  const badCfg = await page.evaluate((v) => window.e2e.loadBadConfig(v, "/local/model/config.json"), TV);
+  check("本地模型：换进的 config.json 音素表对不上 → 拒绝（override-mismatch），之后引擎是空的", /^override-mismatch/.test(badCfg.error ?? "") && await page.evaluate(() => window.e2e.engine.loaded() === null), JSON.stringify(badCfg));
+  const unknown = await page.evaluate((v) => window.e2e.loadOverride(v, { "weights.bin": "/local/model/config.json" }), TV);
+  check("本地模型：只能换音色已有的文件 → 别的名字拒绝", /has no file "weights\.bin"/.test(unknown.error ?? ""), JSON.stringify(unknown));
+  const back = await page.evaluate((v) => window.e2e.engine.load(v), TV);
+  const back1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
+  check("本地模型：不带 override 再装 → 换回包里的权重（和最开始一样长）", back.alreadyLoaded === false && back.override.length === 0 && back1.sec === base1.sec, `${back1.sec} / ${base1.sec}`);
   const dots = await page.evaluate(() => window.e2e.synth("……", "ja"));
   check("只有标点的一句 → 长度 0 的一段（不报错）", dots.sec === 0, JSON.stringify(dots));
   console.log(`  （つくよみちゃん 建器 ${lAll.createMs} ms；日 ${ja.sec.toFixed(1)} s 音频 / ${ja.ms} ms，英 ${en2.sec.toFixed(1)} s / ${en2.ms} ms，中 ${zh.sec.toFixed(1)} s / ${zh.ms} ms）`);

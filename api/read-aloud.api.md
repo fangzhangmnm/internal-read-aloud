@@ -65,6 +65,7 @@ export interface LoadResult {
     // (undocumented)
     createMs: number;
     langs: SpeechLang[];
+    override: string[];
     // (undocumented)
     sampleRate: number;
     speakers: number;
@@ -231,6 +232,8 @@ export interface ReadAloudOptions {
     steadiness?: number;
     // (undocumented)
     steady?: boolean;
+    // (undocumented)
+    whole?: boolean;
 }
 
 // @public (undocumented)
@@ -280,10 +283,12 @@ export interface SpeechEngine extends Synthesizer {
     isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
     load(voice: string, opts?: {
         langs?: readonly SpeechLang[];
+        override?: Readonly<Record<string, Blob>>;
     }): Promise<LoadResult>;
     loaded(): {
         voice: string;
         langs: SpeechLang[];
+        override: string[];
     } | null;
     // (undocumented)
     status(voice: string): Promise<VoiceStatus>;
@@ -312,6 +317,7 @@ export interface Synthesizer {
         speaker?: number;
         speed?: number;
         steadiness?: number;
+        whole?: boolean;
     }): Promise<Clip>;
 }
 

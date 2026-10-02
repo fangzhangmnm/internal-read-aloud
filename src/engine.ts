@@ -40,10 +40,13 @@ export interface SpeechEngine extends Synthesizer {
   /**
    * 把音色装进引擎（首次几秒）。synth 之前必须先 load。
    * langs = 只装这几种语言（省内存：日语前端固定占 160 MB）；不给 = 已经下好的全部语言。必装的包不齐、或点名的语言一种都没下 → 拒绝，错误信息 "pack-missing"。
+   * override = 本地模型（user 2026-10-02「加一个本地上传的模型，这样我们改权重可以拖到网页上测试，而不用动远端」）：音色包里的文件名
+   *   → 用户自己的文件，这次装载用它代替包里那份（piper-plus：`model.onnx`、`config.json`）。只能换已有的文件；不进缓存、不校验哈希、
+   *   不跨装载留着——下一次 load 不带 override 就换回包里的。换进来的配置和音色的音素表对不上 → 拒绝，错误信息以 "override-mismatch" 开头。
    */
-  load(voice: string, opts?: { langs?: readonly SpeechLang[] }): Promise<LoadResult>;
-  /** 现在装着哪个音色、哪几种语言；没有 = null。 */
-  loaded(): { voice: string; langs: SpeechLang[] } | null;
+  load(voice: string, opts?: { langs?: readonly SpeechLang[]; override?: Readonly<Record<string, Blob>> }): Promise<LoadResult>;
+  /** 现在装着哪个音色、哪几种语言、换了哪些本地文件；没有 = null。 */
+  loaded(): { voice: string; langs: SpeechLang[]; override: string[] } | null;
   /** 最近一次 status / download / import / delete 的结论（同步问「能不能念」用）：给 lang = 那种语言能不能念；不给 = 有没有任何一种能念。没问过 = undefined。 */
   isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
   /** 关掉所有 worker，归还内存（WASM 堆只涨不缩，这是唯一的归还办法）。之后再用会重新起。 */
@@ -59,7 +62,7 @@ const asError = (e: unknown) => (e instanceof Error ? e : new Error(String(e)));
 export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
   const channels = new Map<string, Channel>();   // engine 名 → 活着的 worker
   let seq = 0;
-  let current: { voice: string; langs: SpeechLang[] } | null = null;
+  let current: { voice: string; langs: SpeechLang[]; override: string[] } | null = null;
   const known = new Map<string, VoiceStatus>();
 
   function voiceOf(id: string): VoiceDef {
@@ -154,16 +157,21 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
       if (!langs.length) throw new Error("pack-missing");
       for (const other of [...channels.keys()]) if (other !== v.engine) closeChannel(other, "switched to a voice of another engine");
       const slugs = voicePacks(v, langs);
-      const r = await send<WorkerLoadResult>(channel(v.engine), { op: "load", engine: v.engine, key: `${voice}|${slugs.join(",")}`, slugs });
+      const ov = Object.entries(opts?.override ?? {}).sort(([x], [y]) => (x < y ? -1 : 1));
+      const tag = ov.map(([n, b]) => { const f = b as Partial<File>; return `${n}=${f.name ?? ""}:${b.size}:${f.lastModified ?? ""}`; }).join(";");   // a different file -> a different load
+      const override = ov.map(([name, data]) => ({ name, data }));
+      let r: WorkerLoadResult;
+      try { r = await send<WorkerLoadResult>(channel(v.engine), { op: "load", engine: v.engine, key: `${voice}|${slugs.join(",")}|${tag}`, slugs, ...(override.length ? { override } : {}) }); }
+      catch (e) { current = null; throw e; }   // the worker dropped the previous load before trying this one
       const got = r.langs ? langs.filter((l) => r.langs!.includes(l)) : langs;
-      current = { voice, langs: got };
-      return { voice, langs: got, alreadyLoaded: r.alreadyLoaded, createMs: r.createMs, sampleRate: r.sampleRate, speakers: r.speakers };
+      current = { voice, langs: got, override: override.map((o) => o.name) };
+      return { voice, langs: got, alreadyLoaded: r.alreadyLoaded, createMs: r.createMs, sampleRate: r.sampleRate, speakers: r.speakers, override: [...current.override] };
     },
-    loaded: () => (current ? { voice: current.voice, langs: [...current.langs] } : null),
+    loaded: () => (current ? { voice: current.voice, langs: [...current.langs], override: [...current.override] } : null),
     isKnownReady(voice, lang) { const st = known.get(voice); return st ? (lang ? st.langs.includes(lang) : st.langs.length > 0) : undefined; },
-    synth(text: string, o: { lang: SpeechLang; speaker?: number; speed?: number; steadiness?: number }) {
+    synth(text: string, o: { lang: SpeechLang; speaker?: number; speed?: number; steadiness?: number; whole?: boolean }) {
       if (!current) return Promise.reject(new Error("no voice loaded"));
-      return call<Clip>(() => ({ op: "synth", text, lang: o.lang, speaker: o.speaker ?? 0, speed: o.speed ?? 1, steadiness: Math.min(1, Math.max(0, Number.isFinite(o.steadiness) ? o.steadiness! : 0)) }), current.voice);
+      return call<Clip>(() => ({ op: "synth", text, lang: o.lang, speaker: o.speaker ?? 0, speed: o.speed ?? 1, steadiness: Math.min(1, Math.max(0, Number.isFinite(o.steadiness) ? o.steadiness! : 0)), whole: o.whole !== false }), current.voice);
     },
     dispose() { for (const engine of [...channels.keys()]) closeChannel(engine, "read-aloud engine disposed"); current = null; },
   };

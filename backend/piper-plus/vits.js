@@ -31,6 +31,19 @@ function trimByDurations(audio, d, front, back) {
   const start = Math.max(0, Math.trunc(fs * HOP)), end = audio.length - (Math.trunc(bs * HOP) + Math.trunc(Math.max(0, d[d.length - 1]) * HOP));
   return start >= audio.length || end <= start ? audio : audio.subarray(start, end);
 }
+/**
+ * Sample span of ids0[j] in the trimmed audio. The decoder expands every id to ceil(duration) frames of HOP samples (checked:
+ * Σ ceil(d) × HOP = output length); trimByDurations cuts trunc(Σ d[0..front] × HOP) off the front when it padded, nothing otherwise.
+ */
+function markSpans(markAt, d, front, back, rawLen, outLen) {
+  if (!d) return markAt.map(() => ({ start: 0, end: 0 }));
+  const cum = new Array(d.length + 1); cum[0] = 0;
+  for (let i = 0; i < d.length; i++) cum[i + 1] = cum[i] + Math.max(0, Math.ceil(d[i])) * HOP;
+  let lead = 0;
+  if (front > 0 || back > 0) { let fs = 0; for (let i = 0; i < 1 + front; i++) fs += d[i]; lead = Math.max(0, Math.trunc(fs * HOP)); }
+  const clamp = (v) => Math.min(outLen, Math.max(0, v));
+  return markAt.map((j) => { const p = j + front; return { start: clamp(cum[p] - lead), end: clamp(cum[p + 1] - lead) }; });
+}
 function peakNormalize(a) {
   let m = 0.01; for (let i = 0; i < a.length; i++) { const v = Math.abs(a[i]); if (v > m) m = v; }
   const g = (32767 / 32768) / m, out = new Float32Array(a.length);
@@ -54,9 +67,10 @@ export function createVits(ort, session, config) {
    * @param {number[][]} pros0 one [a1, a2, a3] row per id
    * @param {string} lang      key of config.language_id_map
    * @param {{noiseScale: number, lengthScale: number, noiseW: number}} scales
-   * @returns {Promise<{samples: Float32Array, inputs: object}>}
+   * @param {number[]} [markAt]  indices into ids0 whose sample span in the returned audio is wanted (whole-sentence pauses)
+   * @returns {Promise<{samples: Float32Array, inputs: object, marks?: {start: number, end: number}[]}>}
    */
-  async function synthIds(ids0, pros0, lang, scales) {
+  async function synthIds(ids0, pros0, lang, scales, markAt) {
     let { noiseScale, noiseW } = scales; const { lengthScale } = scales;
     const n0 = ids0.length;
     if (n0 < MIN_PHONEME_IDS) { const ratio = Math.min(1, n0 / MIN_PHONEME_IDS); noiseScale *= Math.max(0.5, ratio); noiseW *= Math.max(0.4, ratio); }
@@ -75,8 +89,10 @@ export function createVits(ort, session, config) {
     const res = await session.run(feeds);
     const raw = new Float32Array(res.output.data), d = res.durations ? new Float32Array(res.durations.data) : null;
     for (const k of Object.keys(res)) res[k].dispose?.();
-    return { samples: peakNormalize(trimByDurations(raw, d, front, back)),
+    const out = { samples: peakNormalize(trimByDurations(raw, d, front, back)),
       inputs: { ids: ids0, pros: pros0, lid, scales: [noiseScale, lengthScale, noiseW], embDim, mask: 0 } };
+    if (markAt && markAt.length) out.marks = markSpans(markAt, d, front, back, raw.length, out.samples.length);
+    return out;
   }
   return { sampleRate, synthIds };
 }

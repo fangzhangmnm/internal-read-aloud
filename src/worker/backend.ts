@@ -10,6 +10,8 @@ export interface BackendLoadContext {
   manifests: PackManifest[];
   /** 这些包里的所有文件合在一起：名字（压缩存放的已解开、名字去掉 `.gz`）→ 字节。后端可以拿走所有权；load 返回后运行时会清空这张表。 */
   files: Map<string, Uint8Array>;
+  /** 宿主这次换掉的文件（本地模型，见 SpeechEngine.load 的 override）：名字 → 包里原来的字节。后端据此核对换进来的文件能不能用（比如音素表）。没换 = 空表。 */
+  replaced: Map<string, Uint8Array>;
 }
 export interface BackendInfo {
   sampleRate: number;
@@ -21,6 +23,6 @@ export interface BackendInfo {
 export interface Backend {
   load(ctx: BackendLoadContext): Promise<BackendInfo>;
   /** 一句进、一段出。没有可念的内容（只有标点 / 不认识的符号）→ 长度 0 的一段。 */
-  synth(text: string, o: { lang: SpeechLang; speaker: number; speed: number; steadiness: number }): Clip | Promise<Clip>;
+  synth(text: string, o: { lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean }): Clip | Promise<Clip>;
   unload(): void | Promise<void>;
 }

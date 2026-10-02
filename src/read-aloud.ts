@@ -21,7 +21,7 @@ import { contextLang, langRuns, type LangRun } from "./lang-route.ts";
 export interface Clip { samples: Float32Array; sampleRate: number }
 /** 控制器向引擎要的唯一一件事。 */
 /** speaker = 一个模型里有几个说话人时的编号（缺省 0）。没有可念的内容（只有标点）→ 长度 0 的一段，控制器跳过这一句。 */
-export interface Synthesizer { synth(text: string, opts: { lang: SpeechLang; speaker?: number; speed?: number; steadiness?: number }): Promise<Clip> }
+export interface Synthesizer { synth(text: string, opts: { lang: SpeechLang; speaker?: number; speed?: number; steadiness?: number; whole?: boolean }): Promise<Clip> }
 /** 正在播的一段：done 在播完或被 stop 时兑现（true = 自然播完，false = 被停）。 */
 export interface Playback { done: Promise<boolean>; stop(): void; pause(): void; resume(): void }
 /** 喇叭：给一段声音，开始播。 */
@@ -31,13 +31,16 @@ export type ReadAloudState = "idle" | "loading" | "playing" | "paused";
 /**
  * steadiness = 实验念法，0（原样，默认）… 1（平稳：采样噪声小 + 稍慢），中间连续可调；后端支持才生效，sherpa 忽略。
  * steady: true = steadiness 1（0.1.9 的开关，留着兼容）。
+ * whole = 整句合成（默认开；user 2026-10-02「加一个整句合成的选项，默认开，可以开关」）：中文 / 英语一句里同一种语言的几个小句
+ *   一次交给模型，小句之间放模型自己认得的停顿记号、再补静音到该有的长度；false = 每个小句单独合成再接起来（0.1.12 及以前的做法）。
+ *   日语本来就整句；后端支持才生效，sherpa 忽略。
  */
 export interface ReadAloudOptions {
   /** 整段文本都按这种语言念；不给 = 每句自己判。 */
   lang?: SpeechLang;
   /** 每句自己判时可用的语言（宿主装进引擎的）；不给 = 中日英都可以。 */
   langs?: SpeechLang[];
-  speaker?: number; speed?: number; steadiness?: number; steady?: boolean; once?: boolean;
+  speaker?: number; speed?: number; steadiness?: number; steady?: boolean; whole?: boolean; once?: boolean;
 }
 export interface ReadAloudDeps {
   engine: Synthesizer;
@@ -124,7 +127,7 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
   }
   /** 合成一句：一段直接交给引擎；几段就一段一段合成，接起来，段间按交界处的标点留停顿（÷ 语速）。 */
   async function synthSentence(sentence: string): Promise<Clip> {
-    const routes = routesFor(sentence), base = { speaker: opts.speaker, speed: opts.speed, steadiness: steadinessOf(opts) };
+    const routes = routesFor(sentence), base = { speaker: opts.speaker, speed: opts.speed, steadiness: steadinessOf(opts), whole: opts.whole !== false };
     if (routes.length === 1) return deps.engine.synth(routes[0]!.text, { ...base, lang: routes[0]!.lang });
     const parts: { clip: Clip; gapMs: number }[] = [];
     for (const r of routes) {
@@ -185,7 +188,7 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
     start(t, from, o = {}) {
       halt();
       if (t !== text) { text = t; spans = splitSentences(t); dropClips(); }
-      else if (o.speaker !== opts.speaker || steadinessOf(o) !== steadinessOf(opts) || o.speed !== opts.speed || o.lang !== opts.lang || String(o.langs ?? "") !== String(opts.langs ?? "")) dropClips();   // 换了音色 / 语速 / 语言：旧的合成结果不能用
+      else if (o.speaker !== opts.speaker || steadinessOf(o) !== steadinessOf(opts) || (o.whole !== false) !== (opts.whole !== false) || o.speed !== opts.speed || o.lang !== opts.lang || String(o.langs ?? "") !== String(opts.langs ?? "")) dropClips();   // 换了音色 / 语速 / 语言：旧的合成结果不能用
       opts = o; ctx = contextLang(t); continuous = !o.once;
       const i = sentenceAt(spans, from);
       if (i < 0) { index = -1; setState("idle"); if (continuous) emit("end"); return; }

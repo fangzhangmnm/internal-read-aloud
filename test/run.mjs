@@ -5,5 +5,6 @@ import "./lang-route.test.mjs";
 import "./read-aloud.test.mjs";
 import "./packs.test.mjs";
 import "./clauses.test.mjs";
+import "./whole.test.mjs";
 import "./redline-guard.test.mjs";
 run();

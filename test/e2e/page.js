@@ -42,12 +42,16 @@ window.e2e = {
   /** 合成一句，回报时长 / 采样率 / 响度（不把 PCM 传回 node，除非 keep：留在 window.e2e.kept 里等取）。 */
   async synth(text, lang, o = {}) {
     const t0 = performance.now();
-    const c = await window.e2e.engine.synth(text, { lang, speaker: o.speaker ?? 0, speed: o.speed, steadiness: o.steadiness });
+    const c = await window.e2e.engine.synth(text, { lang, speaker: o.speaker ?? 0, speed: o.speed, steadiness: o.steadiness, whole: o.whole });
     let sum = 0; for (let i = 0; i < c.samples.length; i++) sum += c.samples[i] * c.samples[i];
     if (o.keep) (window.e2e.kept ??= {})[o.keep] = c;
     // 这一段里最长的一截「完全静音」（后端在小句之间垫的静音是精确的 0）
     let run = 0, longest = 0; for (let i = 0; i < c.samples.length; i++) { if (c.samples[i] === 0) { if (++run > longest) longest = run; } else run = 0; }
-    return { ms: Math.round(performance.now() - t0), sec: c.samples.length / c.sampleRate, sampleRate: c.sampleRate, rms: Math.sqrt(sum / Math.max(1, c.samples.length)), silenceMs: Math.round((longest / c.sampleRate) * 1000) };
+    // 最长的一截「安静」（10 ms 一格、均方根低于 −50 dBFS）：整句合成时停顿 = 模型自己的安静 + 补的静音，查补够了没有（只查代码，不当听感）
+    const f = Math.round(c.sampleRate * 0.01); let qr = 0, ql = 0;
+    for (let i = 0; i + f <= c.samples.length; i += f) { let s = 0; for (let k = i; k < i + f; k++) s += c.samples[k] * c.samples[k]; if (Math.sqrt(s / f) < 0.00316) { if (++qr > ql) ql = qr; } else qr = 0; }
+    let sig = 0; for (let i = 0; i < c.samples.length; i++) sig += Math.abs(c.samples[i]) * ((i % 7) + 1);   // 两段输出是否相同
+    return { ms: Math.round(performance.now() - t0), sec: c.samples.length / c.sampleRate, sampleRate: c.sampleRate, rms: Math.sqrt(sum / Math.max(1, c.samples.length)), silenceMs: Math.round((longest / c.sampleRate) * 1000), quietMs: ql * 10, sig: Math.round(sig * 1000) / 1000 };
   },
   /** 留着的一段 → 16 位 PCM 的 base64（node 那头写成 wav）。 */
   pcm16(name) {
@@ -65,6 +69,17 @@ window.e2e = {
       files.push(new File([await (await fetch(`${window.e2e.bases[slug]}/packs/${slug}/manifest.json`)).arrayBuffer()], "manifest.json"));
     }
     return files;
+  },
+  /** 本地模型：url 表（文件名 → 测试服务器上的地址）→ Blob → engine.load(voice, { override })；失败回错误信息。 */
+  async loadOverride(voice, urls, langs) {
+    const override = {};
+    for (const [name, url] of Object.entries(urls)) override[name] = new File([await (await fetch(url)).arrayBuffer()], url.split("/").pop());
+    try { return await window.e2e.engine.load(voice, { langs, override }); } catch (e) { return { error: e.message }; }
+  },
+  /** 音素表改掉一个编号的 config.json，当本地文件换进去。 */
+  async loadBadConfig(voice, url, langs) {
+    const cfg = await (await fetch(url)).json(); const k = Object.keys(cfg.phoneme_id_map)[5]; cfg.phoneme_id_map[k] = [9999];
+    try { return await window.e2e.engine.load(voice, { langs, override: { "config.json": new Blob([JSON.stringify(cfg)]) } }); } catch (e) { return { error: e.message }; }
   },
   wait(pred, ms = 120000) { return new Promise((res, rej) => { const t0 = Date.now(); const tick = () => { if (pred()) res(true); else if (Date.now() - t0 > ms) rej(new Error("wait timeout: " + window.e2e.events.join(","))); else setTimeout(tick, 30); }; tick(); }); },
 };

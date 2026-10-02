@@ -22,6 +22,8 @@ export interface LoadResult {
   alreadyLoaded: boolean; createMs: number; sampleRate: number;
   /** 说话人个数。 */
   speakers: number;
+  /** 这次换成宿主给的本地文件的文件名（没换 = 空）。 */
+  override: string[];
 }
 /** worker 装好之后回的。 */
 export interface WorkerLoadResult { alreadyLoaded: boolean; createMs: number; sampleRate: number; speakers: number; langs?: string[] }
@@ -41,9 +43,9 @@ export type Request =
   | { id: number; op: "download"; slugs: string[]; base: string }
   | { id: number; op: "import"; slugs: string[]; files: File[] }
   | { id: number; op: "delete"; slugs: string[] }
-  /** key = 门面给这次装载起的名字（同名再装 = 已经装着）。 */
-  | { id: number; op: "load"; engine: string; key: string; slugs: string[] }
-  | { id: number; op: "synth"; text: string; lang: SpeechLang; speaker: number; speed: number; steadiness: number }
+  /** key = 门面给这次装载起的名字（同名再装 = 已经装着）。override = 宿主给的替换文件（本地模型），只替换包里已有的文件名。 */
+  | { id: number; op: "load"; engine: string; key: string; slugs: string[]; override?: { name: string; data: Blob }[] }
+  | { id: number; op: "synth"; text: string; lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean }
   | { id: number; op: "unload" };
 
 export type Response =

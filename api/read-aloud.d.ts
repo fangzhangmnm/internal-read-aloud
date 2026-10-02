@@ -55,6 +55,8 @@ export declare interface LoadResult {
     sampleRate: number;
     /** 说话人个数。 */
     speakers: number;
+    /** 这次换成宿主给的本地文件的文件名（没换 = 空）。 */
+    override: string[];
 }
 
 /**
@@ -169,6 +171,9 @@ export declare interface ReadAloudEvents {
 /**
  * steadiness = 实验念法，0（原样，默认）… 1（平稳：采样噪声小 + 稍慢），中间连续可调；后端支持才生效，sherpa 忽略。
  * steady: true = steadiness 1（0.1.9 的开关，留着兼容）。
+ * whole = 整句合成（默认开；user 2026-10-02「加一个整句合成的选项，默认开，可以开关」）：中文 / 英语一句里同一种语言的几个小句
+ *   一次交给模型，小句之间放模型自己认得的停顿记号、再补静音到该有的长度；false = 每个小句单独合成再接起来（0.1.12 及以前的做法）。
+ *   日语本来就整句；后端支持才生效，sherpa 忽略。
  */
 export declare interface ReadAloudOptions {
     /** 整段文本都按这种语言念；不给 = 每句自己判。 */
@@ -179,6 +184,7 @@ export declare interface ReadAloudOptions {
     speed?: number;
     steadiness?: number;
     steady?: boolean;
+    whole?: boolean;
     once?: boolean;
 }
 
@@ -239,14 +245,19 @@ export declare interface SpeechEngine extends Synthesizer {
     /**
      * 把音色装进引擎（首次几秒）。synth 之前必须先 load。
      * langs = 只装这几种语言（省内存：日语前端固定占 160 MB）；不给 = 已经下好的全部语言。必装的包不齐、或点名的语言一种都没下 → 拒绝，错误信息 "pack-missing"。
+     * override = 本地模型（user 2026-10-02「加一个本地上传的模型，这样我们改权重可以拖到网页上测试，而不用动远端」）：音色包里的文件名
+     *   → 用户自己的文件，这次装载用它代替包里那份（piper-plus：`model.onnx`、`config.json`）。只能换已有的文件；不进缓存、不校验哈希、
+     *   不跨装载留着——下一次 load 不带 override 就换回包里的。换进来的配置和音色的音素表对不上 → 拒绝，错误信息以 "override-mismatch" 开头。
      */
     load(voice: string, opts?: {
         langs?: readonly SpeechLang[];
+        override?: Readonly<Record<string, Blob>>;
     }): Promise<LoadResult>;
-    /** 现在装着哪个音色、哪几种语言；没有 = null。 */
+    /** 现在装着哪个音色、哪几种语言、换了哪些本地文件；没有 = null。 */
     loaded(): {
         voice: string;
         langs: SpeechLang[];
+        override: string[];
     } | null;
     /** 最近一次 status / download / import / delete 的结论（同步问「能不能念」用）：给 lang = 那种语言能不能念；不给 = 有没有任何一种能念。没问过 = undefined。 */
     isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
@@ -280,6 +291,7 @@ export declare interface Synthesizer {
         speaker?: number;
         speed?: number;
         steadiness?: number;
+        whole?: boolean;
     }): Promise<Clip>;
 }
 

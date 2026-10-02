@@ -10,8 +10,10 @@
 //   ja  ja-frontend.js  OpenJTalk from pyopenjtalk-plus (WASM) + its dictionary + JS port of its rule passes
 //   en  en-g2p.js       CMUdict + port of upstream english.py (the piper-plus WASM has no English phonemizer)
 //   zh  zh-g2p.js       JS port of the piper-plus Rust G2P (no 60 MB WASM)
-// Not reference behaviour, on purpose: for en and zh a sentence is cut at punctuation clusters and the pieces are joined with
-// silence (table of cluster kinds and pause lengths: text.js); the model gets no pause token at punctuation in those languages.
+// Not reference behaviour, on purpose: for en and zh a sentence is cut at punctuation clusters (table of cluster kinds and pause
+// lengths: text.js). Default: each piece is synthesized alone and the pieces are joined with silence. With `whole: true` the pieces
+// of one language run go to the model in ONE pass with its pause token at each junction and the pause is padded to length
+// (whole.js); only a language switch still cuts.
 // Chinese digits are written out in hanzi first (the reference drops them silently). Inside Chinese, brand names / acronyms / letters
 // are read the Mandarin way (upstream loanword table) and any other English word is cut out and read by the English frontend with the
 // English language id (when English is loaded), see splitChineseEnglish.
@@ -24,6 +26,7 @@ import { createChineseG2p, readsAsChinese } from "./zh-g2p.js";
 import { encodeTokens, segmentText } from "./encode.js";
 import { createVits } from "./vits.js";
 import { splitClausesDetailed, normalizeZhNumbers, stripMarkup } from "./text.js";
+import { joinPieces, padSilence } from "./whole.js";
 
 /** Names the backend looks up in `ctx.files`. A language is offered only when ALL of its files are present. */
 const FILES = Object.freeze({
@@ -87,6 +90,8 @@ const jsonOf = (files, name) => JSON.parse(new TextDecoder().decode(bytesOf(file
  * @property {number} [speed]     1 = the reference pace (length_scale 1.5); length_scale = 1.5 / speed. Clamped to 0.25 … 4.
  * @property {number} [steadiness] experiment, 0 (default) … 1: interpolates SCALES -> STEADY_SCALES (less sampling noise, a little slower)
  * @property {boolean} [steady]  same as steadiness 1 (kept from 0.1.9)
+ * @property {boolean} [whole]   zh / en: one model pass per language run, pause token + padded silence at the junctions (whole.js);
+ *   default false = each clause piece alone (ja is always whole)
  *
  * @typedef {Object} SynthResult
  * @property {Float32Array} samples   mono, −1 … 1, peak-normalised; length 0 when the text has nothing pronounceable
@@ -175,14 +180,31 @@ export function createPiperPlusBackend() {
         runs.forEach((r, k) => segments.push({ lang: r.lang, text: r.text, pauseMs: k === runs.length - 1 ? pauseMs : RUN_GAP_MS }));
       }
       const clips = [], gaps = [], debug = [];   // gaps[i] = silence (samples) after clip i
+      // encode; an unpronounceable piece (punctuation, unknown symbols: BOS, pad, EOS only) is dropped and its pause carried over
+      const encoded = [];
       for (const { lang: segLang, text: piece, pauseMs } of segments) {
-        if (!piece.trim()) continue;
-        const { ids, pros } = state.g2p[segLang](piece);
-        if (ids.length <= 3) continue;   // BOS, pad, EOS only: nothing pronounceable (punctuation, unknown symbols)
-        const r = await state.vits.synthIds(ids, pros, segLang, scales);
-        clips.push(r.samples);
-        gaps.push(Math.round((pauseMs / speed / 1000) * sr));   // pauses scale with the speaking rate, like everything else
-        if (o.__debug) debug.push({ text: piece, lang: segLang, ...r.inputs });
+        const enc = piece.trim() ? state.g2p[segLang](piece) : null;
+        if (!enc || enc.ids.length <= 3) { if (encoded.length) encoded[encoded.length - 1].pauseMs = Math.max(encoded[encoded.length - 1].pauseMs, pauseMs); continue; }
+        encoded.push({ lang: segLang, text: piece, pauseMs, ids: enc.ids, pros: enc.pros });
+      }
+      // groups = what goes to the model in one pass: with `whole`, consecutive pieces of the same language; otherwise one piece each
+      const groups = [];
+      for (const e of encoded) {
+        const g = groups[groups.length - 1];
+        if (o.whole && g && g[0].lang === e.lang) g.push(e); else groups.push([e]);
+      }
+      for (const g of groups) {
+        const joined = g.length > 1 ? joinPieces(g) : null;
+        const parts = joined ? [{ ...joined, lang: g[0].lang, text: g.map((e) => e.text).join("") }] : g;
+        for (const part of parts) {
+          const r = await state.vits.synthIds(part.ids, part.pros, part.lang, scales, part.marks ? part.marks.map((m) => m.index) : undefined);
+          let samples = r.samples, padded;
+          if (part.marks) ({ samples, padded } = padSilence(samples, sr, part.marks.map((m, k) => ({ ...r.marks[k], pauseMs: m.pauseMs })), speed));
+          clips.push(samples);
+          const after = part === parts[parts.length - 1] ? g[g.length - 1].pauseMs : part.pauseMs;
+          gaps.push(Math.round((after / speed / 1000) * sr));   // pauses scale with the speaking rate, like everything else
+          if (o.__debug) debug.push({ text: part.text, lang: part.lang, ...r.inputs, ...(padded ? { padded } : {}) });
+        }
       }
       const total = clips.reduce((a, c) => a + c.length, 0) + gaps.slice(0, -1).reduce((a, g) => a + g, 0);
       const samples = clips.length === 1 ? clips[0] : new Float32Array(total);
