@@ -24,9 +24,11 @@ export interface LoadResult {
   speakers: number;
   /** 这次换成宿主给的本地文件的文件名（没换 = 空）。 */
   override: string[];
+  /** 模型认不认预设（声明了 `preset` 输入）：宿主据此决定露不露预设的输入框。 */
+  preset: boolean;
 }
 /** worker 装好之后回的。 */
-export interface WorkerLoadResult { alreadyLoaded: boolean; createMs: number; sampleRate: number; speakers: number; langs?: string[] }
+export interface WorkerLoadResult { alreadyLoaded: boolean; createMs: number; sampleRate: number; speakers: number; langs?: string[]; preset?: boolean }
 /** worker 开工前要知道的三件事（宿主经门面给）。 */
 export interface WorkerInit {
   /** 引擎文件所在目录的绝对 URL（以 / 结尾）；只有二进制由宿主 vendor 的引擎才用。 */
@@ -45,7 +47,7 @@ export type Request =
   | { id: number; op: "delete"; slugs: string[] }
   /** key = 门面给这次装载起的名字（同名再装 = 已经装着）。override = 宿主给的替换文件（本地模型），只替换包里已有的文件名。 */
   | { id: number; op: "load"; engine: string; key: string; slugs: string[]; override?: { name: string; data: Blob }[] }
-  | { id: number; op: "synth"; text: string; lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean }
+  | { id: number; op: "synth"; text: string; lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean; preset: number }
   | { id: number; op: "unload" };
 
 export type Response =

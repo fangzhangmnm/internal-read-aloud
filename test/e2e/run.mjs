@@ -238,6 +238,18 @@ try {
     const mera = existsSync(join(LOCAL, "mera/config.json")) ? await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/base/base-nounify.onnx", "config.json": "/local/mera/config.json" }), TV) : null;
     if (mera) check("本地模型：メラちゃん的 config.json（旧一代，86 个记号编号不同）→ 拒绝", /^override-mismatch: config\.json maps \d+ symbol/.test(mera.error ?? ""), JSON.stringify(mera));
   } else console.log("  （检疫桶里没有导出的底模，跳过底模那两条）");
+  check("现役月读的模型没有 preset 输入 → 装载结果报 preset: false", same.preset === false, JSON.stringify(same));
+  if (existsSync(join(LOCAL, "work/model-langemb/tsukuyomi-preset16.onnx"))) {
+    // 预设约定（user 2026-10-02「onnx可以实现可以不实现，输入就是一个用户键盘输入的signed int，然后模型随便解释」）。
+    // tsukuyomi-preset16：夹到 0..15，bit0 dp / bit1 enc_p / bit2 flow / bit3 dec 读中文向量。念法 1 + 整句关 → 时长确定，比时长。
+    const pr = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-preset16.onnx" }), TV);
+    check("预设：带 preset 输入的模型 → 装载结果报 preset: true", !pr.error && pr.preset === true && await page.evaluate(() => window.e2e.engine.loaded().preset === true), JSON.stringify(pr));
+    const S = "两个人也不是很会野外生存。", P = (p) => page.evaluate(([s, p]) => window.e2e.synth(s, "zh", { steadiness: 1, whole: false, preset: p }), [S, p]);
+    const p0 = await P(0), p1 = await P(1), p8 = await P(8), pNeg = await P(-5), pBig = await P(99), p15 = await P(15);
+    check("预设 0 = 原版：和不带预设的现役月读一样长", p0.sec === base1.sec, `${p0.sec} / ${base1.sec}`);
+    check("预设 1（只有时长读中文向量）：明显变长；预设 8（只有解码器）：时长不变", p1.sec > p0.sec * 1.5 && p8.sec === p0.sec && p8.rms > 0.01, `${p0.sec} / ${p1.sec} / ${p8.sec}`);
+    check("预设越界由模型夹住：−5 = 0，99 = 15", pNeg.sec === p0.sec && pBig.sec === p15.sec, `${pNeg.sec} ${p0.sec} / ${pBig.sec} ${p15.sec}`);
+  } else console.log("  （检疫桶里没有 preset16 模型，跳过预设那几条）");
   const back = await page.evaluate((v) => window.e2e.engine.load(v), TV);
   const back1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
   check("本地模型：不带 override 再装 → 换回包里的权重（和最开始一样长）", back.alreadyLoaded === false && back.override.length === 0 && back1.sec === base1.sec, `${back1.sec} / ${base1.sec}`);

@@ -57,6 +57,8 @@ export declare interface LoadResult {
     speakers: number;
     /** 这次换成宿主给的本地文件的文件名（没换 = 空）。 */
     override: string[];
+    /** 模型认不认预设（声明了 `preset` 输入）：宿主据此决定露不露预设的输入框。 */
+    preset: boolean;
 }
 
 /**
@@ -174,6 +176,8 @@ export declare interface ReadAloudEvents {
  * whole = 整句合成（默认开；user 2026-10-02「加一个整句合成的选项，默认开，可以开关」）：中文 / 英语一句里同一种语言的几个小句
  *   一次交给模型，小句之间放模型自己认得的停顿记号、再补静音到该有的长度；false = 每个小句单独合成再接起来（0.1.12 及以前的做法）。
  *   日语本来就整句；后端支持才生效，sherpa 忽略。
+ * preset = 预设（家族约定，user 2026-10-02「我们统一加一个预设的约定，onnx可以实现可以不实现，输入就是一个用户键盘输入的signed int，
+ *   然后模型随便解释」）：用户敲的带符号整数，原样交给模型；模型声明了 `preset` 输入才喂，没声明 = 忽略。默认 0。
  */
 export declare interface ReadAloudOptions {
     /** 整段文本都按这种语言念；不给 = 每句自己判。 */
@@ -185,6 +189,7 @@ export declare interface ReadAloudOptions {
     steadiness?: number;
     steady?: boolean;
     whole?: boolean;
+    preset?: number;
     once?: boolean;
 }
 
@@ -258,6 +263,7 @@ export declare interface SpeechEngine extends Synthesizer {
         voice: string;
         langs: SpeechLang[];
         override: string[];
+        preset: boolean;
     } | null;
     /** 最近一次 status / download / import / delete 的结论（同步问「能不能念」用）：给 lang = 那种语言能不能念；不给 = 有没有任何一种能念。没问过 = undefined。 */
     isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
@@ -292,6 +298,7 @@ export declare interface Synthesizer {
         speed?: number;
         steadiness?: number;
         whole?: boolean;
+        preset?: number;
     }): Promise<Clip>;
 }
 

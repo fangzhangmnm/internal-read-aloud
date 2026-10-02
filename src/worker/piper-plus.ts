@@ -39,9 +39,9 @@ export function createPiperPlusBackendAdapter(): Backend {
       const was = replaced?.get("config.json"), now = files.get("config.json");
       if (was && now) checkReplacedConfig(was, now);
       const r = await impl.load({ files });
-      return { sampleRate: r.sampleRate, speakers: r.voices, langs: r.langs };
+      return { sampleRate: r.sampleRate, speakers: r.voices, langs: r.langs, preset: r.preset };
     },
-    synth: (text, o) => impl.synth(text, { lang: o.lang, voice: o.speaker, speed: o.speed, steadiness: o.steadiness, whole: o.whole }),
+    synth: (text, o) => impl.synth(text, { lang: o.lang, voice: o.speaker, speed: o.speed, steadiness: o.steadiness, whole: o.whole, preset: o.preset }),
     unload: () => impl.unload(),
   };
 }

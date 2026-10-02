@@ -66,6 +66,7 @@ export interface LoadResult {
     createMs: number;
     langs: SpeechLang[];
     override: string[];
+    preset: boolean;
     // (undocumented)
     sampleRate: number;
     speakers: number;
@@ -225,6 +226,8 @@ export interface ReadAloudOptions {
     // (undocumented)
     once?: boolean;
     // (undocumented)
+    preset?: number;
+    // (undocumented)
     speaker?: number;
     // (undocumented)
     speed?: number;
@@ -289,6 +292,7 @@ export interface SpeechEngine extends Synthesizer {
         voice: string;
         langs: SpeechLang[];
         override: string[];
+        preset: boolean;
     } | null;
     // (undocumented)
     status(voice: string): Promise<VoiceStatus>;
@@ -318,6 +322,7 @@ export interface Synthesizer {
         speed?: number;
         steadiness?: number;
         whole?: boolean;
+        preset?: number;
     }): Promise<Clip>;
 }
 

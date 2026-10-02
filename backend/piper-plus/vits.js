@@ -68,9 +68,10 @@ export function createVits(ort, session, config) {
    * @param {string} lang      key of config.language_id_map
    * @param {{noiseScale: number, lengthScale: number, noiseW: number}} scales
    * @param {number[]} [markAt]  indices into ids0 whose sample span in the returned audio is wanted (whole-sentence pauses)
+   * @param {number} [preset]    the user's preset (signed int; family convention): fed only when the model declares a `preset` input
    * @returns {Promise<{samples: Float32Array, inputs: object, marks?: {start: number, end: number}[]}>}
    */
-  async function synthIds(ids0, pros0, lang, scales, markAt) {
+  async function synthIds(ids0, pros0, lang, scales, markAt, preset = 0) {
     let { noiseScale, noiseW } = scales; const { lengthScale } = scales;
     const n0 = ids0.length;
     if (n0 < MIN_PHONEME_IDS) { const ratio = Math.min(1, n0 / MIN_PHONEME_IDS); noiseScale *= Math.max(0.5, ratio); noiseW *= Math.max(0.4, ratio); }
@@ -86,6 +87,7 @@ export function createVits(ort, session, config) {
     if (names.has("speaker_embedding")) feeds.speaker_embedding = new ort.Tensor("float32", new Float32Array(embDim), [1, embDim]);
     if (names.has("speaker_embedding_mask")) feeds.speaker_embedding_mask = new ort.Tensor("int64", BigInt64Array.from([0n]), [1, 1]);
     if (names.has("sid")) feeds.sid = new ort.Tensor("int64", BigInt64Array.from([0n]), [1]);
+    if (names.has("preset")) feeds.preset = new ort.Tensor("int64", BigInt64Array.from([big(preset)]), [1]);
     const res = await session.run(feeds);
     const raw = new Float32Array(res.output.data), d = res.durations ? new Float32Array(res.durations.data) : null;
     for (const k of Object.keys(res)) res[k].dispose?.();
@@ -94,5 +96,7 @@ export function createVits(ort, session, config) {
     if (markAt && markAt.length) out.marks = markSpans(markAt, d, front, back, raw.length, out.samples.length);
     return out;
   }
-  return { sampleRate, synthIds };
+  // preset convention (2026-10-02): a model MAY declare an int64 [1] input named `preset`; the user's signed int goes in as is and the
+  // model decides what it means (tsukuyomi-preset16: clamp 0..15, one bit per module). Models without it are fed nothing.
+  return { sampleRate, synthIds, hasPreset: names.has("preset") };
 }

@@ -19,10 +19,12 @@ export interface BackendInfo {
   speakers: number;
   /** 实际装上的语言（后端按到手的文件判断）；不报 = 门面按音色定义算。 */
   langs?: string[];
+  /** 模型声明了 `preset` 输入（家族的预设约定）。 */
+  preset?: boolean;
 }
 export interface Backend {
   load(ctx: BackendLoadContext): Promise<BackendInfo>;
   /** 一句进、一段出。没有可念的内容（只有标点 / 不认识的符号）→ 长度 0 的一段。 */
-  synth(text: string, o: { lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean }): Clip | Promise<Clip>;
+  synth(text: string, o: { lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean; preset: number }): Clip | Promise<Clip>;
   unload(): void | Promise<void>;
 }

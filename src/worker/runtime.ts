@@ -245,7 +245,7 @@ function onMessage(e: MessageEvent<Request>): void {
         case "load": result = await load(req.engine, req.key, req.slugs, req.override); break;
         case "synth": {
           if (!loaded) throw new Error("no voice loaded");
-          const clip = await loaded.backend.synth(req.text, { lang: req.lang, speaker: req.speaker, speed: req.speed, steadiness: req.steadiness, whole: req.whole });
+          const clip = await loaded.backend.synth(req.text, { lang: req.lang, speaker: req.speaker, speed: req.speed, steadiness: req.steadiness, whole: req.whole, preset: req.preset });
           result = clip; if (clip.samples.buffer.byteLength) transfer = [clip.samples.buffer as ArrayBuffer];
           break;
         }
