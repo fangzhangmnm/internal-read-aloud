@@ -61,9 +61,21 @@ describe("本地模型：换进来的 config.json 要和音色的音素表一模
   const enc = (o) => new TextEncoder().encode(JSON.stringify(o));
   const base = { phoneme_id_map: { _: [0], a: [5] }, language_id_map: { ja: 0, zh: 2 }, inference: { noise_scale: 0.667 } };
   it("只有别的字段不同 → 可以", () => { checkReplacedConfig(enc(base), enc({ ...base, inference: { noise_scale: 0.3 } })); });
-  it("音素表不同 → 拒绝，错误以 override-mismatch 开头", () => {
+  it("音色末尾多出新增记号（编号排在换进来的整张表之后）→ 可以（piper-plus 底模对月读）", () => {
+    checkReplacedConfig(enc({ ...base, phoneme_id_map: { _: [0], a: [5], "ɧ": [6], "ɵ": [7] } }), enc(base));
+  });
+  it("换进来的多出几个记号 → 可以", () => { checkReplacedConfig(enc(base), enc({ ...base, phoneme_id_map: { _: [0], a: [5], z: [9] } })); });
+  it("缺了中间的记号（前端会发、会被悄悄丢掉）→ 拒绝", () => {
+    let msg = ""; try { checkReplacedConfig(enc({ ...base, phoneme_id_map: { _: [0], b: [3], a: [5] } }), enc(base)); } catch (e) { msg = e.message; }
+    assert(msg.startsWith("override-mismatch") && msg.includes("lacks"), msg);
+  });
+  it("语言表不同 → 拒绝", () => {
+    let msg = ""; try { checkReplacedConfig(enc(base), enc({ ...base, language_id_map: { ja: 0, zh: 1 } })); } catch (e) { msg = e.message; }
+    assert(msg.startsWith("override-mismatch") && msg.includes("language_id_map"), msg);
+  });
+  it("同一个记号编号不同 → 拒绝，错误以 override-mismatch 开头", () => {
     let msg = ""; try { checkReplacedConfig(enc(base), enc({ ...base, phoneme_id_map: { _: [0], a: [6] } })); } catch (e) { msg = e.message; }
-    assert(msg.startsWith("override-mismatch") && msg.includes("phoneme_id_map"), msg);
+    assert(msg.startsWith("override-mismatch") && msg.includes("other ids"), msg);
   });
   it("不是 JSON → 拒绝", () => {
     let msg = ""; try { checkReplacedConfig(enc(base), new TextEncoder().encode("not json")); } catch (e) { msg = e.message; }

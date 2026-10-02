@@ -23,7 +23,7 @@ const ZH = "TEST-piper-zh-xiao-ya-int8", JA = "TEST-supertonic-3-int8";
 const TSU = process.env.READ_ALOUD_TSU_PACKS ?? join(process.env.HOME, "jupyter/third-party/piper-plus/packs-local");
 const SAMPLES = process.env.READ_ALOUD_E2E_SAMPLES ?? "";
 // 本地模型测试用的权重（检疫桶）：原版月读 + 「换回中文语言向量」的实验权重（~/jupyter/third-party/piper-plus/langemb-exp/NOTES.md）
-const LOCAL = process.env.READ_ALOUD_LOCAL_MODELS ?? join(process.env.HOME, "jupyter/third-party/piper-plus/work");   // 给了目录 = 把つくよみちゃん合成的几句存成 wav（给人听 / 给识别回环用）
+const LOCAL = process.env.READ_ALOUD_LOCAL_MODELS ?? join(process.env.HOME, "jupyter/third-party/piper-plus");   // 给了目录 = 把つくよみちゃん合成的几句存成 wav（给人听 / 给识别回环用）
 for (const [what, p] of [["engine wasm", ENGINE_WASM], ["engine tts js", ENGINE_TTS_JS], ["test packs", join(PACKS, ZH)], ["tsukuyomi packs", join(TSU, "voices/tsukuyomi-chan.json")], ["esbuild", ESBUILD ?? ""]]) if (!p || !existsSync(p)) { console.error(`[e2e] missing ${what}: ${p}`); process.exit(2); }
 
 await mkdir(join(HERE, ".out"), { recursive: true });
@@ -218,19 +218,26 @@ try {
 
   // ── 本地模型（user 2026-10-02「加一个本地上传的模型，这样我们改权重可以拖到网页上测试，而不用动远端」）──
   const base1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
-  const same = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/model/tsukuyomi-chan-6lang-fp16.onnx" }), TV);
+  const same = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model/tsukuyomi-chan-6lang-fp16.onnx" }), TV);
   check("本地模型：换进一模一样的权重 → 重新装载、报出换了 model.onnx", !same.error && same.alreadyLoaded === false && same.override.join() === "model.onnx" && await page.evaluate(() => window.e2e.engine.loaded().override.join() === "model.onnx"), JSON.stringify(same));
   const same1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
   check("本地模型：一模一样的权重 → 一样长（念法 1 时长确定）", same1.sec === base1.sec, `${same1.sec} / ${base1.sec}`);
-  if (existsSync(join(LOCAL, "model-langemb/tsukuyomi-langemb-from-base.onnx"))) {
-    const alt = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/model-langemb/tsukuyomi-langemb-from-base.onnx" }), TV);
+  if (existsSync(join(LOCAL, "work/model-langemb/tsukuyomi-langemb-from-base.onnx"))) {
+    const alt = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-langemb-from-base.onnx" }), TV);
     const alt1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
     check("本地模型：换进改过的权重（换回中文语言向量）→ 时长变了（中文向量下念得慢）", !alt.error && alt1.rms > 0.01 && alt1.sec > base1.sec * 1.15, `${JSON.stringify(alt)} ${alt1.sec} / ${base1.sec}`);
   } else console.log("  （检疫桶里没有换回中文向量的实验权重，跳过「输出变了」那一条）");
-  const badCfg = await page.evaluate((v) => window.e2e.loadBadConfig(v, "/local/model/config.json"), TV);
+  const badCfg = await page.evaluate((v) => window.e2e.loadBadConfig(v, "/local/work/model/config.json"), TV);
   check("本地模型：换进的 config.json 音素表对不上 → 拒绝（override-mismatch），之后引擎是空的", /^override-mismatch/.test(badCfg.error ?? "") && await page.evaluate(() => window.e2e.engine.loaded() === null), JSON.stringify(badCfg));
-  const unknown = await page.evaluate((v) => window.e2e.loadOverride(v, { "weights.bin": "/local/model/config.json" }), TV);
+  const unknown = await page.evaluate((v) => window.e2e.loadOverride(v, { "weights.bin": "/local/work/model/config.json" }), TV);
   check("本地模型：只能换音色已有的文件 → 别的名字拒绝", /has no file "weights\.bin"/.test(unknown.error ?? ""), JSON.stringify(unknown));
+  if (existsSync(join(LOCAL, "base/base-nounify.onnx"))) {
+    const bse = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/base/base-nounify.onnx", "config.json": "/local/base/config.json" }), TV);
+    const bse1 = bse.error ? null : await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh"));
+    check("本地模型：piper-plus 底模 + 它自己的 config.json（少的只是末尾的瑞典语记号）→ 收下、念得出中文", !bse.error && bse.override.join() === "config.json,model.onnx" && bse1 && bse1.sec > 0.5 && bse1.rms > 0.01, JSON.stringify(bse) + JSON.stringify(bse1));
+    const mera = existsSync(join(LOCAL, "mera/config.json")) ? await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/base/base-nounify.onnx", "config.json": "/local/mera/config.json" }), TV) : null;
+    if (mera) check("本地模型：メラちゃん的 config.json（旧一代，86 个记号编号不同）→ 拒绝", /^override-mismatch: config\.json maps \d+ symbol/.test(mera.error ?? ""), JSON.stringify(mera));
+  } else console.log("  （检疫桶里没有导出的底模，跳过底模那两条）");
   const back = await page.evaluate((v) => window.e2e.engine.load(v), TV);
   const back1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
   check("本地模型：不带 override 再装 → 换回包里的权重（和最开始一样长）", back.alreadyLoaded === false && back.override.length === 0 && back1.sec === base1.sec, `${back1.sec} / ${base1.sec}`);
