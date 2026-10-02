@@ -8,6 +8,7 @@
 // ——宿主把用得上的单独打成文件，URL 给 createSpeechEngine。
 // 「音色」= 一份 VoiceDef（由哪几个包组成）；包 = 家族模型仓的一个 pack。门面只说音色。
 export { splitSentences, sentenceAt, detectLang, MAX_SPAN, type SentenceSpan, type SpeechLang } from "./sentences.ts";
+export { contextLang, langRuns, langsIn, type LangRun } from "./lang-route.ts";
 export { createReadAloud, type ReadAloud, type ReadAloudDeps, type ReadAloudOptions, type ReadAloudState, type ReadAloudEvents, type Clip, type Synthesizer, type AudioSink, type Playback } from "./read-aloud.ts";
 export { createSpeechEngine, type SpeechEngine, type SpeechEngineDeps, type WorkerSpec } from "./engine.ts";
 export { createWebAudioSink, type WebAudioSink } from "./sink.ts";

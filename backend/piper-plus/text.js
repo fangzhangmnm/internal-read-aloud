@@ -146,7 +146,7 @@ function integerToHanzi(s) {
  */
 export function normalizeZhNumbers(text) {
   const t = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xff10 + 48)).replace(/(\d),(?=\d{3}(\D|$))/g, "$1");
-  return t.replace(/(\d+)(?:\.(\d+))?(%|％)?(年)?/g, (m, int, frac, pct, year) => {
+  return t.replace(/(?<![A-Za-z0-9.])(\d+)(?:\.(\d+))?(%|％)?(年)?(?![A-Za-z])/g, (m, int, frac, pct, year) => {   // digits glued to letters (MP3, 3D) stay for the Latin-token path
     if (year && !frac && !pct && int.length === 4) return digitByDigit(int) + "年";   // 2026年 -> 二零二六年
     let s = integerToHanzi(int) + (frac ? "点" + digitByDigit(frac) : "");
     if (pct) s = "百分之" + s;

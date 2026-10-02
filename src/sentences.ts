@@ -136,7 +136,8 @@ export function sentenceAt(spans: readonly SentenceSpan[], offset: number): numb
   return lo;
 }
 
-/** 这段文字用哪种语言念：有假名 = 日语；有汉字没假名 = 中文；都没有 = 英语。只看前 4000 个码元（整本书不用全扫）。 */
+/** （老接口：整段一种语言、有一个假名就算日语。新代码用 lang-route.ts 的 contextLang / langRuns / langsIn。）
+ *  这段文字用哪种语言念：有假名 = 日语；有汉字没假名 = 中文；都没有 = 英语。只看前 4000 个码元（整本书不用全扫）。 */
 export function detectLang(text: string): SpeechLang {
   const s = text.length > 4000 ? text.slice(0, 4000) : text;
   if (/[぀-ヿｦ-ﾟ]/.test(s)) return "ja";

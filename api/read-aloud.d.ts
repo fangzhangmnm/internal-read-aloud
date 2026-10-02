@@ -15,13 +15,17 @@ export declare interface Clip {
     sampleRate: number;
 }
 
+/** 一段正文的主语言（只看前 20000 个码元）。 */
+export declare function contextLang(text: string): SpeechLang;
+
 export declare function createReadAloud(deps: ReadAloudDeps): ReadAloud;
 
 export declare function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine;
 
 export declare function createWebAudioSink(): WebAudioSink;
 
-/** 这段文字用哪种语言念：有假名 = 日语；有汉字没假名 = 中文；都没有 = 英语。只看前 4000 个码元（整本书不用全扫）。 */
+/** （老接口：整段一种语言、有一个假名就算日语。新代码用 lang-route.ts 的 contextLang / langRuns / langsIn。）
+ *  这段文字用哪种语言念：有假名 = 日语；有汉字没假名 = 中文；都没有 = 英语。只看前 4000 个码元（整本书不用全扫）。 */
 export declare function detectLang(text: string): SpeechLang;
 
 /** 宿主内嵌进 bundle 的一个包：packId 是信任根。 */
@@ -29,6 +33,18 @@ export declare interface EmbeddedPack {
     packId: string;
     manifest: PackManifest;
 }
+
+/** 一句话里的一段：交给哪种语言的前端念。 */
+export declare interface LangRun {
+    lang: SpeechLang;
+    text: string;
+}
+
+/** 一句话 → 按语言切成几段（多数句子只有一段）。各段文字拼起来 = 原句。ctx = 这段正文的主语言（contextLang）。 */
+export declare function langRuns(sentence: string, ctx: SpeechLang): LangRun[];
+
+/** 念这段正文要装哪几种语言（顺序 ja / zh / en）。 */
+export declare function langsIn(text: string): SpeechLang[];
 
 export declare interface LoadResult {
     voice: string;
@@ -155,7 +171,10 @@ export declare interface ReadAloudEvents {
  * steady: true = steadiness 1（0.1.9 的开关，留着兼容）。
  */
 export declare interface ReadAloudOptions {
+    /** 整段文本都按这种语言念；不给 = 每句自己判。 */
     lang?: SpeechLang;
+    /** 每句自己判时可用的语言（宿主装进引擎的）；不给 = 中日英都可以。 */
+    langs?: SpeechLang[];
     speaker?: number;
     speed?: number;
     steadiness?: number;

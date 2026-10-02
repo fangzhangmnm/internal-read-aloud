@@ -11,7 +11,10 @@
 //     停顿除以语速倍数（user 2026-10-01「加速加1.5档，然后中间的空也应该等比例加」）。
 //   · 任何时候 stop / 再 start / skip：旧的一轮立刻作废（代号 gen），它还没回来的合成结果回来也不播。
 //   · **新点的优先，任何时刻只有一段在响**：再 start / skip / stop 先掐掉正在响的那一段，再起新的。
-import { splitSentences, sentenceAt, detectLang, type SentenceSpan, type SpeechLang } from "./sentences.ts";
+//   · **语言**：给了 lang = 整段文本都按这种语言念（老行为）。不给 = 每句自己判（lang-route.ts；user 2026-10-01「每句话路由不同的前端」）：
+//     一句里中日混排就切成几段分别合成、再接起来；langs = 宿主装好的语言，判出来的语言没装就改用主语言（主语言也没装就用 langs 第一个）。
+import { splitSentences, sentenceAt, type SentenceSpan, type SpeechLang } from "./sentences.ts";
+import { contextLang, langRuns, type LangRun } from "./lang-route.ts";
 
 /** 一段合成好的声音。 */
 export interface Clip { samples: Float32Array; sampleRate: number }
@@ -28,7 +31,13 @@ export type ReadAloudState = "idle" | "loading" | "playing" | "paused";
  * steadiness = 实验念法，0（原样，默认）… 1（平稳：采样噪声小 + 稍慢），中间连续可调；后端支持才生效，sherpa 忽略。
  * steady: true = steadiness 1（0.1.9 的开关，留着兼容）。
  */
-export interface ReadAloudOptions { lang?: SpeechLang; speaker?: number; speed?: number; steadiness?: number; steady?: boolean; once?: boolean }
+export interface ReadAloudOptions {
+  /** 整段文本都按这种语言念；不给 = 每句自己判。 */
+  lang?: SpeechLang;
+  /** 每句自己判时可用的语言（宿主装进引擎的）；不给 = 中日英都可以。 */
+  langs?: SpeechLang[];
+  speaker?: number; speed?: number; steadiness?: number; steady?: boolean; once?: boolean;
+}
 export interface ReadAloudDeps {
   engine: Synthesizer;
   sink: AudioSink;
@@ -71,6 +80,12 @@ function steadinessOf(o: ReadAloudOptions): number {
   return Math.min(1, Math.max(0, v));
 }
 
+/** 一句里两段语言交界处的停顿（毫秒，1 倍速）：前一段以句末符号收尾 400、以逗号类收尾 250、交界处没有标点 60。 */
+function runGapMs(prev: string): number {
+  const t = prev.replace(/[\s"'”’」』）)】》〉〟]+$/u, "");
+  return /[。！？!?…‥.]$/u.test(t) ? 400 : /[，、；：,;:—]$/u.test(t) ? 250 : 60;
+}
+
 export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
   const lookahead = Math.max(0, deps.lookahead ?? 2);
   const gapS = deps.sentenceGapMs ?? 600, gapP = deps.paragraphGapMs ?? 900;
@@ -78,7 +93,7 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
   const listeners: { [K in keyof ReadAloudEvents]: Set<ReadAloudEvents[K]> } = { sentence: new Set(), state: new Set(), end: new Set(), error: new Set() };
   const emit = <K extends keyof ReadAloudEvents>(ev: K, ...args: Parameters<ReadAloudEvents[K]>) => { for (const cb of [...listeners[ev]]) (cb as (...a: unknown[]) => void)(...args); };
 
-  let text = "", spans: SentenceSpan[] = [], lang: SpeechLang = "en", opts: ReadAloudOptions = {};
+  let text = "", spans: SentenceSpan[] = [], ctx: SpeechLang = "en", opts: ReadAloudOptions = {};
   let index = -1, st: ReadAloudState = "idle", gen = 0, continuous = false;
   let playing: Playback | null = null;
   let clips = new Map<number, Promise<Clip>>();
@@ -92,11 +107,40 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
     if (!p) {
       const sp = spans[i]!;
       const mine = clips, got = ready;
-      p = deps.engine.synth(text.slice(sp.start, sp.end), { lang, speaker: opts.speaker, speed: opts.speed, steadiness: steadinessOf(opts) });
+      p = synthSentence(text.slice(sp.start, sp.end));
       p.then((c) => { if (mine === clips && mine.get(i) === p) got.set(i, c); }, () => { if (mine.get(i) === p) mine.delete(i); });   // 失败的不留：下次再点重算
       clips.set(i, p);
     }
     return p;
+  }
+  /** 这一句交给哪几种语言的前端：给了 lang 就整句一种；否则每句自己判，判出来的语言没装就换成能用的，相邻同语言的并起来。 */
+  function routesFor(sentence: string): LangRun[] {
+    if (opts.lang) return [{ lang: opts.lang, text: sentence }];
+    const allowed = opts.langs?.length ? opts.langs : null;
+    const fallback: SpeechLang = !allowed || allowed.includes(ctx) ? ctx : allowed[0]!;
+    const out: LangRun[] = [];
+    for (const r of langRuns(sentence, ctx)) {
+      const lang = !allowed || allowed.includes(r.lang) ? r.lang : fallback, last = out[out.length - 1];
+      if (last && last.lang === lang) last.text += r.text; else out.push({ lang, text: r.text });
+    }
+    return out;
+  }
+  /** 合成一句：一段直接交给引擎；几段就一段一段合成，接起来，段间按交界处的标点留停顿（÷ 语速）。 */
+  async function synthSentence(sentence: string): Promise<Clip> {
+    const routes = routesFor(sentence), base = { speaker: opts.speaker, speed: opts.speed, steadiness: steadinessOf(opts) };
+    if (routes.length === 1) return deps.engine.synth(routes[0]!.text, { ...base, lang: routes[0]!.lang });
+    const parts: { clip: Clip; gapMs: number }[] = [];
+    for (const r of routes) {
+      const clip = await deps.engine.synth(r.text, { ...base, lang: r.lang });
+      if (clip.samples.length) parts.push({ clip, gapMs: runGapMs(r.text) / pace() });
+    }
+    if (!parts.length) return { samples: new Float32Array(0), sampleRate: 22050 };
+    const sr = parts[0]!.clip.sampleRate;
+    const gap = (k: number) => (k < parts.length - 1 ? Math.round((parts[k]!.gapMs / 1000) * sr) : 0);
+    const out = new Float32Array(parts.reduce((a, p, k) => a + p.clip.samples.length + gap(k), 0));
+    let off = 0;
+    parts.forEach((p, k) => { out.set(p.clip.samples, off); off += p.clip.samples.length + gap(k); });
+    return { samples: out, sampleRate: sr };
   }
   /** 只留当前句前一句到提前量之内的；别的放掉（一句几百 KB）。 */
   function prune(i: number): void { for (const k of [...clips.keys()]) if (k < i - 1 || k > i + lookahead) { clips.delete(k); ready.delete(k); } }
@@ -144,8 +188,8 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
     start(t, from, o = {}) {
       halt();
       if (t !== text) { text = t; spans = splitSentences(t); dropClips(); }
-      else if (o.speaker !== opts.speaker || steadinessOf(o) !== steadinessOf(opts) || o.speed !== opts.speed || (o.lang ?? lang) !== lang) dropClips();   // 换了音色 / 语速 / 语言：旧的合成结果不能用
-      opts = o; lang = o.lang ?? detectLang(t); continuous = !o.once;
+      else if (o.speaker !== opts.speaker || steadinessOf(o) !== steadinessOf(opts) || o.speed !== opts.speed || o.lang !== opts.lang || String(o.langs ?? "") !== String(opts.langs ?? "")) dropClips();   // 换了音色 / 语速 / 语言：旧的合成结果不能用
+      opts = o; ctx = contextLang(t); continuous = !o.once;
       const i = sentenceAt(spans, from);
       if (i < 0) { index = -1; setState("idle"); if (continuous) emit("end"); return; }
       void run(i, gen);

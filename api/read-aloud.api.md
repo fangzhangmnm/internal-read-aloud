@@ -21,6 +21,9 @@ export interface Clip {
     samples: Float32Array;
 }
 
+// @public
+export function contextLang(text: string): SpeechLang;
+
 // @public (undocumented)
 export function createReadAloud(deps: ReadAloudDeps): ReadAloud;
 
@@ -40,6 +43,20 @@ export interface EmbeddedPack {
     // (undocumented)
     packId: string;
 }
+
+// @public
+export interface LangRun {
+    // (undocumented)
+    lang: SpeechLang;
+    // (undocumented)
+    text: string;
+}
+
+// @public
+export function langRuns(sentence: string, ctx: SpeechLang): LangRun[];
+
+// @public
+export function langsIn(text: string): SpeechLang[];
 
 // @public (undocumented)
 export interface LoadResult {
@@ -202,8 +219,8 @@ export interface ReadAloudEvents {
 
 // @public
 export interface ReadAloudOptions {
-    // (undocumented)
     lang?: SpeechLang;
+    langs?: SpeechLang[];
     // (undocumented)
     once?: boolean;
     // (undocumented)

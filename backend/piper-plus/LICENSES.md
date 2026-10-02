@@ -17,7 +17,7 @@
 | `en/homographs.json` | g2p-en (Apache-2.0) | ship the licence text, state that the file was converted — §4.6 |
 | `zh/pinyin_*.tone3.json` | pypinyin / pinyin-data / phrase-pinyin-data (MIT) | §4.7 |
 | `ort-wasm-simd-threaded.wasm`, `vendor/onnxruntime-web/*` | onnxruntime (MIT) | §4.8 |
-| `encode.js`, `en-g2p.js`, `zh-g2p.js`, `pua-map.js` (ports of piper-plus code) | piper-plus (MIT) | §4.9 |
+| `encode.js`, `en-g2p.js`, `zh-g2p.js`, `pua-map.js` (ports of piper-plus code); `zh-loanwords.js` (data copied from piper-plus `data/zh_en_loanword.json`, 2026-10-01) | piper-plus (MIT) | §4.9 |
 
 ## 2. つくよみちゃんコーパス — the credit block (mandatory)
 

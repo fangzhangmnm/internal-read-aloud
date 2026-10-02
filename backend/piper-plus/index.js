@@ -12,13 +12,15 @@
 //   zh  zh-g2p.js       JS port of the piper-plus Rust G2P (no 60 MB WASM)
 // Not reference behaviour, on purpose: for en and zh a sentence is cut at punctuation clusters and the pieces are joined with
 // silence (table of cluster kinds and pause lengths: text.js); the model gets no pause token at punctuation in those languages.
-// Chinese digits are written out in hanzi first (the reference drops them silently).
+// Chinese digits are written out in hanzi first (the reference drops them silently). Inside Chinese, brand names / acronyms / letters
+// are read the Mandarin way (upstream loanword table) and any other English word is cut out and read by the English frontend with the
+// English language id (when English is loaded), see splitChineseEnglish.
 
 import * as ort from "./vendor/onnxruntime-web/ort.wasm.bundle.min.mjs";
 import createOjtModule from "./vendor/ojt/ojt.mjs";
 import { createJaFrontend, mountDictionaryBytes } from "./ja-frontend.js";
 import { createEnglishG2p } from "./en-g2p.js";
-import { createChineseG2p } from "./zh-g2p.js";
+import { createChineseG2p, readsAsChinese } from "./zh-g2p.js";
 import { encodeTokens, segmentText } from "./encode.js";
 import { createVits } from "./vits.js";
 import { splitClausesDetailed, normalizeZhNumbers, stripMarkup } from "./text.js";
@@ -40,7 +42,31 @@ export function blendScales(t) {
   const k = Math.min(1, Math.max(0, Number(t) || 0)), mix = (a, b) => a + (b - a) * k;
   return { noiseScale: mix(SCALES.noiseScale, STEADY_SCALES.noiseScale), lengthScale: mix(SCALES.lengthScale, STEADY_SCALES.lengthScale), noiseW: mix(SCALES.noiseW, STEADY_SCALES.noiseW) };
 }   // model README; config.json's 1.0 / 0.8 is the "rushed" setting
-const MIN_CLAUSE_CHARS = { en: 20, zh: 5 };   // weak-break pieces shorter than this are glued; the pause lengths live in text.js (PAUSE_MS)
+const MIN_CLAUSE_CHARS = { en: 20, zh: 2 };   // zh 2 = one hanzi + the comma: every Chinese comma pauses, 「突然，」 and 「嗯，」 too (user 2026-10-01「第一个逗号为什么没停」「嗯为什么不停顿」; was 5)
+const RUN_GAP_MS = 60;   // between a Chinese run and an English word cut out of it (no punctuation there)
+/**
+ * Cut English words that a Mandarin speaker would NOT read the Chinese way out of a Chinese piece: `Harry对他说` -> [en "Harry",
+ * zh "对他说"]. Consecutive such words separated by spaces form one English run. Everything else stays Chinese.
+ * @param {string} piece
+ * @returns {{lang: "zh" | "en", text: string}[]}
+ */
+export function splitChineseEnglish(piece) {
+  const runs = [], WORD = /[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*/g;
+  let last = 0, enStart = -1, enEnd = -1;
+  const flushEn = () => { if (enStart >= 0) { runs.push({ lang: "en", text: piece.slice(enStart, enEnd) }); last = enEnd; enStart = -1; } };
+  for (let m = WORD.exec(piece); m; m = WORD.exec(piece)) {
+    const w = m[0], isEn = /[A-Za-z]/.test(w) && !readsAsChinese(w.replace(/['’-]/g, ""));
+    if (!isEn) continue;
+    const gap = piece.slice(enEnd, m.index);
+    if (enStart >= 0 && /^[\s]*$/.test(gap)) { enEnd = m.index + w.length; continue; }   // join "Harry Potter"
+    flushEn();
+    if (m.index > last) runs.push({ lang: "zh", text: piece.slice(last, m.index) });
+    enStart = m.index; enEnd = m.index + w.length;
+  }
+  flushEn();
+  if (last < piece.length) runs.push({ lang: "zh", text: piece.slice(last) });
+  return runs.filter((r) => r.text.trim());
+}   // weak-break pieces shorter than this are glued; the pause lengths live in text.js (PAUSE_MS)
 
 const bytesOf = (files, name) => { const v = files.get(name); if (v === undefined) throw new Error(`piper-plus backend: "${name}" is missing from ctx.files`); return v instanceof Uint8Array ? v : new Uint8Array(v); };
 const jsonOf = (files, name) => JSON.parse(new TextDecoder().decode(bytesOf(files, name)));
@@ -137,15 +163,21 @@ export function createPiperPlusBackend() {
       const scales = { ...base, lengthScale: base.lengthScale / speed };
       const sr = state.vits.sampleRate, str = stripMarkup(String(text ?? ""));
       const pieces = lang === "ja" ? [{ text: str, pauseMs: 0 }] : splitClausesDetailed(str, MIN_CLAUSE_CHARS[lang] ?? 20);
-      const clips = [], gaps = [], debug = [];   // gaps[i] = silence (samples) after clip i
+      // segments = what is synthesized one by one: clause pieces, and inside a Chinese piece the English words cut out of it
+      const segments = [];
       for (const { text: piece, pauseMs } of pieces) {
+        const runs = lang === "zh" && state.g2p.en ? splitChineseEnglish(piece) : [{ lang, text: piece }];
+        runs.forEach((r, k) => segments.push({ lang: r.lang, text: r.text, pauseMs: k === runs.length - 1 ? pauseMs : RUN_GAP_MS }));
+      }
+      const clips = [], gaps = [], debug = [];   // gaps[i] = silence (samples) after clip i
+      for (const { lang: segLang, text: piece, pauseMs } of segments) {
         if (!piece.trim()) continue;
-        const { ids, pros } = state.g2p[lang](piece);
+        const { ids, pros } = state.g2p[segLang](piece);
         if (ids.length <= 3) continue;   // BOS, pad, EOS only: nothing pronounceable (punctuation, unknown symbols)
-        const r = await state.vits.synthIds(ids, pros, lang, scales);
+        const r = await state.vits.synthIds(ids, pros, segLang, scales);
         clips.push(r.samples);
         gaps.push(Math.round((pauseMs / speed / 1000) * sr));   // pauses scale with the speaking rate, like everything else
-        if (o.__debug) debug.push({ text: piece, ...r.inputs });
+        if (o.__debug) debug.push({ text: piece, lang: segLang, ...r.inputs });
       }
       const total = clips.reduce((a, c) => a + c.length, 0) + gaps.slice(0, -1).reduce((a, g) => a + g, 0);
       const samples = clips.length === 1 ? clips[0] : new Float32Array(total);

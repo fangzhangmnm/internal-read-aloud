@@ -202,6 +202,14 @@ try {
 
   const hangul = await page.evaluate(() => window.e2e.synth("안녕하세요。", "ja"));
   check("后端念不了的文字（日语模式下的谚文）→ 长度 0 的一段", hangul.sec === 0, JSON.stringify(hangul));
+  // ── 每句自己判语言（不给 lang）：中文夹英文词、中日混排的一句、纯英文一句 ──
+  const MIXED = "族里的祭司（Tohunga）走过来，神情严肃。\n这个词读作「せんせい」，意思是老师。\nThe end of the story.";
+  await page.evaluate((t) => { window.e2e.sink.unlock(); window.e2e.events.length = 0; window.e2e.live.max = 0; window.e2e.ra.start(t, 0, { langs: ["ja", "zh", "en"] }); }, MIXED);
+  await page.evaluate(() => window.e2e.wait(() => window.e2e.events.includes("end") || window.e2e.events.some((x) => x.startsWith("error"))));
+  const mev = await page.evaluate(() => ({ ev: window.e2e.events.slice(), max: window.e2e.live.max }));
+  check("每句自己判语言：中文夹英文 / 中日混排 / 英文三句都念完、没有出错、没有叠音", mev.ev.filter((x) => x.startsWith("sentence:")).join(",") === "sentence:0,sentence:1,sentence:2" && mev.ev[mev.ev.length - 1] === "end" && !mev.ev.some((x) => x.startsWith("error")) && mev.max === 1, JSON.stringify(mev));
+  const zhEn = await page.evaluate(() => window.e2e.synth("族里的祭司（Tohunga）走过来。", "zh"));
+  check("中文里夹的英文词（英语前端念）：有声音", zhEn.sec > 1 && zhEn.rms > 0.01, JSON.stringify(zhEn));
   const JTEXT = "こんにちは。\n안녕하세요。\nさようなら。";
   await page.evaluate((t) => { window.e2e.sink.unlock(); window.e2e.events.length = 0; window.e2e.ra.start(t, 0, { lang: "ja" }); }, JTEXT);
   await page.evaluate(() => window.e2e.wait(() => window.e2e.events.includes("end") || window.e2e.events.some((x) => x.startsWith("error"))));

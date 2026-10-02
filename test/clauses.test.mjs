@@ -66,4 +66,9 @@ describe("backend/piper-plus 句内断句（标点簇查表）", () => {
     eq(r(blendScales(0)), "0.667/1.5/0.5"); eq(r(blendScales(1)), "0.333/1.7/0"); eq(r(blendScales(0.5)), "0.5/1.6/0.25");
     eq(r(blendScales(-3)), r(blendScales(0))); eq(r(blendScales(9)), r(blendScales(1)));
   });
+  it("中文的门槛（后端用 2：一个字 + 逗号）：每个逗号都停，「突然，」「嗯，」也是（user 2026-10-01「第一个逗号为什么没停」「嗯为什么不停顿」）", () => {
+    eq(show("突然，一群鸬鹚拍打着翅膀飞了起来，连带着陷阱和长杆一起飞向了天空。", 2), "突然，⟨weak⟩ | 一群鸬鹚拍打着翅膀飞了起来，⟨weak⟩ | 连带着陷阱和长杆一起飞向了天空。⟨end⟩");
+    eq(show("嗯，我知道了。", 2), "嗯，⟨weak⟩ | 我知道了。⟨end⟩");
+    eq(show("他说，好。", 2), "他说，⟨weak⟩ | 好。⟨end⟩");
+  });
 });

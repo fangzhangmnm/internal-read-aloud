@@ -12,6 +12,7 @@
 //   the run of hanzi, length of the run) -> encoder.
 import { TOKEN2CHAR } from "./pua-map.js";
 import { encodeTokens } from "./encode.js";
+import LOANWORDS from "./zh-loanwords.js";
 
 const INITIAL_TO_IPA = { b: "p", p: "pʰ", m: "m", f: "f", d: "t", t: "tʰ", n: "n", l: "l", g: "k", k: "kʰ", h: "x", j: "tɕ", q: "tɕʰ", x: "ɕ",
   zh: "tʂ", ch: "tʂʰ", sh: "ʂ", r: "ɻ", z: "ts", c: "tsʰ", s: "s" };
@@ -70,6 +71,27 @@ function applyToneSandhi(st) {   // st: [[normalizedSyllable, tone], …] of one
  * @param {{single: Record<string,string>, phrases: Record<string,string|string[]>}} dicts  parsed pinyin_single.tone3.json
  *   (codepoint as decimal string -> "ni3") and pinyin_phrases.tone3.json (phrase -> "yi2 ge4")
  */
+/**
+ * Latin tokens a Mandarin speaker reads in Chinese (and so stay in the Chinese piece): a brand name in the loanword table, an
+ * acronym in the table, any all-capitals token of up to 6 characters, digits allowed (spelled: `3D`, `MP5`), a single letter. Everything else is
+ * an ordinary English word: the backend hands it to the English frontend when that is loaded (see index.js), else it is spelled.
+ * @param {string} token  /[A-Za-z0-9]+/ with at least one letter
+ */
+export function readsAsChinese(token) {
+  return Object.hasOwn(LOANWORDS.loanwords, token) || Object.hasOwn(LOANWORDS.acronyms, token.toUpperCase()) || /^(?=[A-Z0-9]*[A-Z])[A-Z0-9]{1,6}$/.test(token) || /^[A-Za-z]$/.test(token);
+}
+const DIGIT_PINYIN = ["ling2", "yi1", "er4", "san1", "si4", "wu3", "liu4", "qi1", "ba1", "jiu3"];
+/** Latin token -> pinyin syllables (upstream phonemize_embedded_english): loanword -> acronym -> letter by letter. Deviation: digits in
+ *  a spelled token are read as Chinese numerals (upstream drops them: `3D` would lose the 3). */
+function latinToPinyin(token) {
+  if (Object.hasOwn(LOANWORDS.loanwords, token)) return LOANWORDS.loanwords[token];
+  const up = token.toUpperCase();
+  if (Object.hasOwn(LOANWORDS.acronyms, up)) return LOANWORDS.acronyms[up];
+  const out = [];
+  for (const ch of up) { if (Object.hasOwn(LOANWORDS.letter_fallback, ch)) out.push(...LOANWORDS.letter_fallback[ch]); else if (ch >= "0" && ch <= "9") out.push(DIGIT_PINYIN[+ch]); }
+  return out;
+}
+
 export function createChineseG2p({ single, phrases }) {
   const singleDict = new Map(), phraseDict = new Map();
   for (const [k, v] of Object.entries(single)) { const cp = Number(k); if (!Number.isInteger(cp)) continue; const py = Array.isArray(v) ? v[0] : v; if (py) singleDict.set(String.fromCodePoint(cp), py); }
@@ -109,6 +131,18 @@ export function createChineseG2p({ single, phrases }) {
     const tokens = [], prosody = [];
     for (let idx = 0; idx < n; idx++) {
       const ch = chars[idx], c = cp[idx];
+      // A Latin token (letters and digits, at least one letter) is read the way a Mandarin speaker reads it (2026-10-01; before,
+      // its letters went to the model one by one as phoneme symbols — `iPhone` came out as noise). Tokens the English frontend
+      // should read never get here when English is loaded: index.js cuts them out first.
+      if (/[A-Za-z0-9]/.test(ch) && !c.chinese) {
+        let j = idx; while (j < n && /[A-Za-z0-9]/.test(chars[j])) j++;
+        const tok = chars.slice(idx, j).join("");
+        if (/[A-Za-z]/.test(tok)) {
+          const syl = latinToPinyin(tok);
+          syl.forEach((py, k) => { const [base, tone] = extractTone(py); for (const t of pinyinToIpa(normalizePinyin(base), tone)) { tokens.push(t); prosody.push([tone, k + 1, syl.length]); } });
+          idx = j - 1; continue;
+        }
+      }
       if (!c.chinese) {
         if (Object.hasOwn(ZH_PUNCT_MAP, ch)) { tokens.push(ZH_PUNCT_MAP[ch]); prosody.push(null); }
         else if (ZH_PUNCT.has(ch)) { tokens.push(ch); prosody.push(null); }

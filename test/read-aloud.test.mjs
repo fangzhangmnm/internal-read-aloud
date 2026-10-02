@@ -147,6 +147,25 @@ describe("createReadAloud", () => {
     for (let i = 0; i < 4; i++) { await r2.synthAll(); await r2.finishPlay(); }
     eq(JSON.stringify(r2.sleeps), JSON.stringify([750, 1125, 750]));
   });
+  it("不给 lang：每句自己判语言；中日混排的句子分段合成再接起来；判出来的语言没装就换成能用的", async () => {
+    const langs = [];
+    // 中日混排的一句：三段按顺序送进引擎，各带各的语言
+    const rr = rig({});
+    rr.ra.start("这个词读作「せんせい」，意思是老师。", 0, { once: true });
+    for (let k = 0; k < 3; k++) { await rr.settle(); const p = rr.pendingSynth.shift(); langs.push(`${p.o.lang}:${p.text}`); p.resolve(2); }
+    await rr.settle();
+    eq(langs.join(" | "), "zh:这个词读作 | ja:「せんせい」， | zh:意思是老师。");
+    eq(rr.playbacks.length, 1, "one clip for the whole sentence");
+    eq(rr.playbacks[0].clip.samples.length, 6, "the three runs (2 samples each) are joined into one clip (the fake sample rate 1 makes the gaps 0 samples)");
+    // 只装了中文：日语那段改用中文，三段并成一段
+    const r3 = rig();
+    r3.ra.start("这个词读作「せんせい」，意思是老师。", 0, { once: true, langs: ["zh"] });
+    eq(r3.pendingSynth.length, 1); eq(r3.pendingSynth[0].o.lang, "zh"); eq(r3.pendingSynth[0].text, "这个词读作「せんせい」，意思是老师。");
+    // 给了 lang：整句一种语言（老行为）
+    const r4 = rig();
+    r4.ra.start("这个词读作「せんせい」，意思是老师。", 0, { once: true, lang: "ja" });
+    eq(r4.pendingSynth.length, 1); eq(r4.pendingSynth[0].o.lang, "ja");
+  });
   it("合成出错：发 error、回 idle、不再往下读", async () => {
     const r = rig();
     r.ra.start(TEXT, 0);
