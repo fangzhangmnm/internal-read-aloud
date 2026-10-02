@@ -177,25 +177,27 @@ export function createPiperPlusBackend() {
       const pieces = lang === "ja" ? [{ text: str, pauseMs: 0 }] : splitClausesDetailed(str, MIN_CLAUSE_CHARS[lang] ?? 20);
       // segments = what is synthesized one by one: clause pieces, and inside a Chinese piece the English words cut out of it
       const segments = [];
-      for (const { text: piece, pauseMs } of pieces) {
+      for (const { text: piece, pauseMs, quote } of pieces) {
         const runs = lang === "zh" ? splitChineseEnglish(piece) : [{ lang, text: piece }];
         const needEn = runs.find((r) => r.lang === "en");
         if (needEn && !state.g2p.en) throw new Error(`piper-plus backend: language "en" is not available (English words inside Chinese: ${JSON.stringify(needEn.text.slice(0, 30))})`);
-        runs.forEach((r, k) => segments.push({ lang: r.lang, text: r.text, pauseMs: k === runs.length - 1 ? pauseMs : RUN_GAP_MS }));
+        runs.forEach((r, k) => segments.push({ lang: r.lang, text: r.text, pauseMs: k === runs.length - 1 ? pauseMs : RUN_GAP_MS, quote: k === runs.length - 1 && !!quote }));
       }
       const clips = [], gaps = [], debug = [];   // gaps[i] = silence (samples) after clip i
       // encode; an unpronounceable piece (punctuation, unknown symbols: BOS, pad, EOS only) is dropped and its pause carried over
       const encoded = [];
-      for (const { lang: segLang, text: piece, pauseMs } of segments) {
+      for (const { lang: segLang, text: piece, pauseMs, quote } of segments) {
         const enc = piece.trim() ? state.g2p[segLang](piece) : null;
-        if (!enc || enc.ids.length <= 3) { if (encoded.length) encoded[encoded.length - 1].pauseMs = Math.max(encoded[encoded.length - 1].pauseMs, pauseMs); continue; }
-        encoded.push({ lang: segLang, text: piece, pauseMs, ids: enc.ids, pros: enc.pros });
+        if (!enc || enc.ids.length <= 3) { const prev = encoded[encoded.length - 1]; if (prev) { prev.pauseMs = Math.max(prev.pauseMs, pauseMs); prev.quote = prev.quote || quote; } continue; }
+        encoded.push({ lang: segLang, text: piece, pauseMs, quote, ids: enc.ids, pros: enc.pros });
       }
-      // groups = what goes to the model in one pass: with `whole`, consecutive pieces of the same language; otherwise one piece each
+      // groups = what goes to the model in one pass: with `whole`, consecutive pieces of the same language joined at quote-free breaks
+      // (a break whose punctuation holds a quote or bracket is really cut; owner 2026-10-02「引号系的应该用分句而不是pause符号」);
+      // otherwise one piece each
       const groups = [];
       for (const e of encoded) {
-        const g = groups[groups.length - 1];
-        if (o.whole && g && g[0].lang === e.lang) g.push(e); else groups.push([e]);
+        const g = groups[groups.length - 1], prev = g && g[g.length - 1];
+        if (o.whole && g && g[0].lang === e.lang && !prev.quote) g.push(e); else groups.push([e]);
       }
       for (const g of groups) {
         const joined = g.length > 1 ? joinPieces(g) : null;

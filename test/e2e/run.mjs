@@ -213,6 +213,8 @@ try {
   check("整句合成：逗号处的安静（模型自己的 + 补的）至少有 250 ms 左右", wPause.quietMs >= 230, JSON.stringify(wPause));
   const wFast = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1, speed: 2 }));
   check("整句合成：语速 2 时停顿跟着缩（安静段 ≥ 115 ms，且比 1 倍速短）", wFast.quietMs >= 110 && wFast.quietMs < wPause.quietMs, `${wFast.quietMs} / ${wPause.quietMs}`);
+  const wQ = await page.evaluate(() => window.e2e.synth("维薇安皱起眉头，问：“你盯着我看干什么？”", "zh", { steadiness: 1 }));
+  check("整句合成：引号处真切开（冒号 + 开引号那里垫的是整段 350 ms 的纯静音；user「引号系的应该用分句而不是pause符号」）", Math.abs(wQ.silenceMs - 350) <= 8 && wQ.rms > 0.01, JSON.stringify(wQ));
   const wEn = await page.evaluate(() => window.e2e.synth("When the rain stopped, the children ran outside, laughing and shouting.", "en", { steadiness: 1 }));
   check("整句合成：英语也走（有声音）", wEn.sec > 2 && wEn.rms > 0.01, JSON.stringify(wEn));
 

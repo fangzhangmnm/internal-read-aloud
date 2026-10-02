@@ -9,6 +9,16 @@ import { blendScales } from "../backend/piper-plus/index.js";
 /** 画成一行好对：`小句⟨停顿类型⟩ | 小句⟨…⟩` */
 const show = (t, n) => splitClausesDetailed(t, n).map((p) => `${p.text}⟨${p.kind}⟩`).join(" | ");
 
+describe("backend/piper-plus 句内断句：每个切点带「这一处标点有没有引号 / 括号」（整句合成在有引号的地方真切开）", () => {
+  it("quote 标记", () => {
+    const q = (t, n) => splitClausesDetailed(t, n).map((p) => p.quote ? "Q" : "-").join("");
+    eq(q("维薇安皱起眉头，问：“你盯着我看干什么？”", 2), "-Q-");
+    eq(q("“可是船上有奶牛呀！”苏一边跑一边说，“我们得先把它赶下去。”", 2), "QQ-");
+    eq(q("一个信使满头大汗，一边跑一边大喊：“好消息！坏消息！快来看啊！”他在人群中转圈乱跑。", 2), "-Q--Q-");
+    eq(q("突然，一群鸬鹚飞了起来，飞向了天空。", 2), "---");
+  });
+});
+
 describe("backend/piper-plus 句内断句（标点簇查表）", () => {
   it("簇里有句末符号 = 强断点（400 ms）：引号里的话和后面的「某某说」分开念；断点落在开引号之前", () => {
     eq(show("“可是船上有奶牛呀！”苏一边跑一边说，", 5), "“可是船上有奶牛呀！”⟨strong⟩ | 苏一边跑一边说，⟨end⟩");
@@ -45,7 +55,8 @@ describe("backend/piper-plus 句内断句（标点簇查表）", () => {
     eq(show("first, because the colonies were weak; second, because they were poor.", 20), "first, because the colonies were weak;⟨weak⟩ | second, because they were poor.⟨end⟩");
     eq(show("我们去公园散步吧，好。", 5), "我们去公园散步吧，好。⟨end⟩");
     eq(show("啊！啊！啊！快跑。", 5), "啊！啊！啊！⟨strong⟩ | 快跑。⟨end⟩");
-    eq(show("他说，“好。”", 5), "他说，“好。”⟨end⟩");
+    eq(show("他说，“好。”", 5), "他说，⟨intro⟩ | “好。”⟨end⟩", "a break with a quote is never glued (user 2026-10-02「引号系的应该用分句而不是pause符号」)");
+    eq(show("维薇安皱起眉头，问：“你盯着我看干什么？”", 2), "维薇安皱起眉头，⟨weak⟩ | 问：⟨intro⟩ | “你盯着我看干什么？”⟨end⟩", "user 2026-10-02: 「问：」 was glued into the quote");
   });
   it("行内公式 / 行内代码里面不断", () => {
     eq(show("已知 $f(x, y) = x; y$ 成立，于是 `a ? b : c` 也成立。", 5), "已知 $f(x, y) = x; y$ 成立，⟨weak⟩ | 于是 `a ? b : c` 也成立。⟨end⟩");

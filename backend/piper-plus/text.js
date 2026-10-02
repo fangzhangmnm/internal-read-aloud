@@ -9,14 +9,16 @@
 // punctuation cluster (`，“`  `！”`  `？”“`  `——`  `，”`  `, "`). The classes present in the cluster decide the pause:
 //
 //   cluster contains            kind     pause    example                                   glued when
-//   sentence-final mark         strong   400 ms   呀！”|苏…   走。”|“好   他想……|算了        a side has < 2 letters / digits / hanzi
+//   sentence-final mark         strong   400 ms   呀！”|苏…   走。”|“好   他想……|算了        a side has < 2 letters / digits / hanzi (never when the cluster holds a quote)
 //   dash run (—— / --)          dash     350 ms   these--|first   一下——|然后               same
 //   clause mark + opening quote intro    350 ms   他说，|“好。”   She said,|"Wait."          same
 //   clause mark (, ; : ， ； ： 、) weak     250 ms   很好，|我们   “好吧，”|他说             piece shorter than minChars -> glued to the NEXT
 //   quotes / brackets only      none     —        所谓“自由”的意思                          —
 //
 // The cut is always placed before the first opening quote of the cluster (the quote belongs to what follows), otherwise at the
-// end of the cluster. ASCII "." is not a mark here (inside a span it is a decimal point or an abbreviation); a comma or colon
+// end of the cluster. Each piece also says whether the cluster after it holds a quote or bracket (`quote`): whole-sentence synthesis
+// (whole.js) really cuts there and joins only the quote-free breaks with the model's pause token (owner 2026-10-02, after
+// 「维薇安皱起眉头，问：“你盯着我看干什么？”」 ran into the quote: 「引号系的应该用分句而不是pause符号」). ASCII "." is not a mark here (inside a span it is a decimal point or an abbreviation); a comma or colon
 // between two digits (1,980 / 3:45) and a single hyphen are part of the text. Nothing is cut inside inline maths / inline code.
 export const PAUSE_MS = Object.freeze({ strong: 400, dash: 350, intro: 350, weak: 250 });
 const TERM = new Set(["。", "！", "？", "!", "?", "…", "‥"]);
@@ -78,27 +80,30 @@ export function splitClausesDetailed(sentence, minChars = 20) {
     const kind = has.term ? "strong" : has.dash ? "dash" : has.clause && has.open ? "intro" : has.clause ? "weak" : null;
     if (kind && seenText && j < chars.length) {   // a cluster at the very start or the very end is not a break
       const cutAt = firstOpen >= 0 && markBeforeOpen ? firstOpen : j;
-      raw.push({ text: chars.slice(from, cutAt).join(""), kind }); from = cutAt;
+      raw.push({ text: chars.slice(from, cutAt).join(""), kind, quote: has.open || has.close }); from = cutAt;
     }
     i = j;
   }
-  if (from < chars.length) raw.push({ text: chars.slice(from).join(""), kind: "end" });
+  if (from < chars.length) raw.push({ text: chars.slice(from).join(""), kind: "end", quote: false });
   // Gluing. A short piece that ends at a weak break introduces what follows (`second, because …`), so it is carried FORWARD;
   // only a short tail (nothing after it) is glued backward. The other kinds are glued only around a piece with < 2 speakable chars.
   const len = (t) => Array.from(t).length;
   const join = (a, b, kindOfA) => a + (/[\x21-\x7e]$/.test(a) && /^[\x21-\x7e]/.test(b) && kindOfA !== "dash" ? " " : "") + b;
-  const pieces = raw.map((p) => ({ text: p.text.trim(), kind: p.kind })).filter((p) => p.text);
-  const out = [];   // { text, kind }: kind = the break AFTER this piece
+  const pieces = raw.map((p) => ({ text: p.text.trim(), kind: p.kind, quote: p.quote })).filter((p) => p.text);
+  const out = [];   // { text, kind, quote }: kind / quote = the break AFTER this piece
   let carry = "";
   pieces.forEach((p, idx) => {
     const text = carry ? join(carry, p.text, "weak") : p.text; carry = "";
     if (p.kind === "weak" && idx < pieces.length - 1 && len(text) < minChars) { carry = text; return; }
     const prev = out[out.length - 1];
-    const glueBack = prev && (prev.kind === "weak" ? len(text) < minChars : speakable(prev.text) < 2 || speakable(text) < 2);
-    if (glueBack) { prev.text = join(prev.text, text, prev.kind); prev.kind = p.kind; }
-    else out.push({ text, kind: p.kind });
+    // a break whose cluster holds a quote is never glued, even around one character (owner 2026-10-02: 「维薇安皱起眉头，问：“你盯着
+    // 我看干什么？”」 — 「问：」 had been glued into the quote; 「引号系的应该用分句而不是pause符号」)
+    const glueBack = prev && !prev.quote && (prev.kind === "weak" ? len(text) < minChars : speakable(prev.text) < 2 || speakable(text) < 2);
+    if (glueBack) { prev.text = join(prev.text, text, prev.kind); prev.kind = p.kind; prev.quote = p.quote; }
+    else out.push({ text, kind: p.kind, quote: p.quote });
   });
-  return out.map((p, idx) => ({ text: p.text, kind: idx === out.length - 1 ? "end" : p.kind, pauseMs: idx === out.length - 1 ? 0 : PAUSE_MS[p.kind] ?? PAUSE_MS.weak }));
+  const last = out.length - 1;
+  return out.map((p, idx) => ({ text: p.text, kind: idx === last ? "end" : p.kind, pauseMs: idx === last ? 0 : PAUSE_MS[p.kind] ?? PAUSE_MS.weak, quote: idx === last ? false : p.quote }));
 }
 /** The pieces only. @param {string} sentence @param {number} [minChars] @returns {string[]} */
 export function splitClauses(sentence, minChars = 20) { return splitClausesDetailed(sentence, minChars).map((p) => p.text); }
