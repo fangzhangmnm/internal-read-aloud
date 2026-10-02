@@ -249,6 +249,16 @@ try {
     check("预设 0 = 原版：和不带预设的现役月读一样长", p0.sec === base1.sec, `${p0.sec} / ${base1.sec}`);
     check("预设 1（只有时长读中文向量）：明显变长；预设 8（只有解码器）：时长不变", p1.sec > p0.sec * 1.5 && p8.sec === p0.sec && p8.rms > 0.01, `${p0.sec} / ${p1.sec} / ${p8.sec}`);
     check("预设越界由模型夹住：−5 = 0，99 = 15", pNeg.sec === p0.sec && pBig.sec === p15.sec, `${pNeg.sec} ${p0.sec} / ${pBig.sec} ${p15.sec}`);
+    // 英文同样走这几个开关（预设模型里中英西法葡五行都换成了底模的行；user 2026-10-02「对了，英文也接，一起测」）
+    const E = "The children ran outside to play in the garden.", PE = (p) => page.evaluate(([s, p]) => window.e2e.synth(s, "en", { steadiness: 1, whole: false, preset: p }), [E, p]);
+    const e0 = await PE(0), e1 = await PE(1), e8 = await PE(8), e15 = await PE(15), eBig = await PE(99);
+    await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model/tsukuyomi-chan-6lang-fp16.onnx" }), TV);
+    const eOrig = await page.evaluate((s) => window.e2e.synth(s, "en", { steadiness: 1, whole: false }), E);
+    await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-preset16.onnx" }), TV);
+    check("预设 · 英文：0 = 原版（一样长）；1（时长读底模的英文向量）时长变了；8（只有解码器）时长不变；99 = 15；都有声音", e0.sec === eOrig.sec && e1.sec !== e0.sec && e8.sec === e0.sec && eBig.sec === e15.sec && [e0, e1, e8, e15].every((x) => x.rms > 0.01), `orig ${eOrig.sec} / 0 ${e0.sec} / 1 ${e1.sec} / 8 ${e8.sec} / 15 ${e15.sec} / 99 ${eBig.sec}`);
+    const j0 = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { steadiness: 1, preset: 0 }));
+    const j15 = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { steadiness: 1, preset: 15 }));
+    check("预设 · 日语：0 和 15 一样长（日语那一行每档都没动）", j0.sec === j15.sec && j0.rms > 0.01, `${j0.sec} / ${j15.sec}`);
   } else console.log("  （检疫桶里没有 preset16 模型，跳过预设那几条）");
   const back = await page.evaluate((v) => window.e2e.engine.load(v), TV);
   const back1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
