@@ -15,7 +15,7 @@ export function createPiperPlusBackendAdapter(): Backend {
       const r = await impl.load({ files });
       return { sampleRate: r.sampleRate, speakers: r.voices, langs: r.langs };
     },
-    synth: (text, o) => impl.synth(text, { lang: o.lang, voice: o.speaker, speed: o.speed, steady: o.steady }),
+    synth: (text, o) => impl.synth(text, { lang: o.lang, voice: o.speaker, speed: o.speed, steadiness: o.steadiness }),
     unload: () => impl.unload(),
   };
 }

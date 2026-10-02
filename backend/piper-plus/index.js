@@ -31,9 +31,15 @@ const FILES = Object.freeze({
   zh: ["zh/pinyin_single.tone3.json", "zh/pinyin_phrases.tone3.json"],
 });
 const SCALES = Object.freeze({ noiseScale: 0.667, lengthScale: 1.5, noiseW: 0.5 });
-// `steady` (experiment, 2026-10-01 prosody-exp): less sampling noise + a little slower. Recogniser error zh 14.3 -> 4.8 %, en 12.3 -> 4.8 %,
-// ja 3.7 -> 1.3 %; every take identical. Possibly flatter — that is for ears to judge, hence a switch, not a default.
-const STEADY_SCALES = Object.freeze({ noiseScale: 0.333, lengthScale: 1.7, noiseW: 0 });   // model README; config.json's 1.0 / 0.8 is the "rushed" setting
+// `steadiness` 0…1 (experiment, 2026-10-01 prosody-exp): 0 = SCALES, 1 = STEADY_SCALES, in between each scale is interpolated linearly.
+// At 1 the recogniser error drops zh 14.3 -> 4.8 %, en 12.3 -> 4.8 %, ja 3.7 -> 1.3 % and every take is identical, but the owner hears it
+// as flat (「平稳档是很容易听清楚，就是有点像机翻」), hence a slider. `steady: true` (0.1.9) = steadiness 1.
+const STEADY_SCALES = Object.freeze({ noiseScale: 0.333, lengthScale: 1.7, noiseW: 0 });
+/** t = 0 -> SCALES, 1 -> STEADY_SCALES, linear in each scale; clamped to 0…1. */
+export function blendScales(t) {
+  const k = Math.min(1, Math.max(0, Number(t) || 0)), mix = (a, b) => a + (b - a) * k;
+  return { noiseScale: mix(SCALES.noiseScale, STEADY_SCALES.noiseScale), lengthScale: mix(SCALES.lengthScale, STEADY_SCALES.lengthScale), noiseW: mix(SCALES.noiseW, STEADY_SCALES.noiseW) };
+}   // model README; config.json's 1.0 / 0.8 is the "rushed" setting
 const MIN_CLAUSE_CHARS = { en: 20, zh: 5 };   // weak-break pieces shorter than this are glued; the pause lengths live in text.js (PAUSE_MS)
 
 const bytesOf = (files, name) => { const v = files.get(name); if (v === undefined) throw new Error(`piper-plus backend: "${name}" is missing from ctx.files`); return v instanceof Uint8Array ? v : new Uint8Array(v); };
@@ -53,7 +59,8 @@ const jsonOf = (files, name) => JSON.parse(new TextDecoder().decode(bytesOf(file
  * @property {"ja"|"en"|"zh"} lang
  * @property {number} [voice]     0 (default)
  * @property {number} [speed]     1 = the reference pace (length_scale 1.5); length_scale = 1.5 / speed. Clamped to 0.25 … 4.
- * @property {boolean} [steady]  experiment: noise 0.333 / 0, length_scale 1.7 (see STEADY_SCALES)
+ * @property {number} [steadiness] experiment, 0 (default) … 1: interpolates SCALES -> STEADY_SCALES (less sampling noise, a little slower)
+ * @property {boolean} [steady]  same as steadiness 1 (kept from 0.1.9)
  *
  * @typedef {Object} SynthResult
  * @property {Float32Array} samples   mono, −1 … 1, peak-normalised; length 0 when the text has nothing pronounceable
@@ -126,7 +133,7 @@ export function createPiperPlusBackend() {
       if (!state.g2p[lang]) throw new Error(`piper-plus backend: language "${lang}" is not available (loaded: ${state.langs.join(", ") || "none"})`);
       if (o.voice !== undefined && o.voice !== 0) throw new RangeError(`piper-plus backend: voice ${o.voice} does not exist (this model has one voice, index 0)`);
       const speed = Math.min(4, Math.max(0.25, Number.isFinite(o.speed) && o.speed > 0 ? o.speed : 1));
-      const base = o.steady ? STEADY_SCALES : SCALES;
+      const base = blendScales(Number.isFinite(o.steadiness) ? o.steadiness : o.steady ? 1 : 0);
       const scales = { ...base, lengthScale: base.lengthScale / speed };
       const sr = state.vits.sampleRate, str = stripMarkup(String(text ?? ""));
       const pieces = lang === "ja" ? [{ text: str, pauseMs: 0 }] : splitClausesDetailed(str, MIN_CLAUSE_CHARS[lang] ?? 20);

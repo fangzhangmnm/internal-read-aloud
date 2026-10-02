@@ -191,9 +191,11 @@ try {
   check("语速 1.25：这一句变短（应是 0.8 倍左右；每一遍有随机差异，门槛放在 0.97）", fast.sec < ja.sec * 0.97, `${fast.sec} vs ${ja.sec}`);
   const zhFast = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { speed: 1.5 }));
   check("小句之间垫的静音跟着语速缩：1 倍速 250 ms，1.5 倍速 167 ms", Math.abs(zh.silenceMs - 250) <= 8 && Math.abs(zhFast.silenceMs - 167) <= 8, `${zh.silenceMs} / ${zhFast.silenceMs}`);
-  const st1 = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steady: true }));
-  const st2 = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steady: true }));
-  check("念法 steady：两遍一模一样长（没有随机），有声音", st1.sec === st2.sec && st1.rms > 0.01, `${st1.sec} / ${st2.sec}`);
+  const st1 = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1 }));
+  const st2 = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1 }));
+  check("念法 steadiness 1：两遍一模一样长（时长没有随机），有声音", st1.sec === st2.sec && st1.rms > 0.01, `${st1.sec} / ${st2.sec}`);
+  const half = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 0.5 }));
+  check("念法 steadiness 0.5：照常出声", half.sec > 1 && half.rms > 0.01, JSON.stringify(half));
   const dots = await page.evaluate(() => window.e2e.synth("……", "ja"));
   check("只有标点的一句 → 长度 0 的一段（不报错）", dots.sec === 0, JSON.stringify(dots));
   console.log(`  （つくよみちゃん 建器 ${lAll.createMs} ms；日 ${ja.sec.toFixed(1)} s 音频 / ${ja.ms} ms，英 ${en2.sec.toFixed(1)} s / ${en2.ms} ms，中 ${zh.sec.toFixed(1)} s / ${zh.ms} ms）`);

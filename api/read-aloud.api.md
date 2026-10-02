@@ -211,6 +211,8 @@ export interface ReadAloudOptions {
     // (undocumented)
     speed?: number;
     // (undocumented)
+    steadiness?: number;
+    // (undocumented)
     steady?: boolean;
 }
 
@@ -292,7 +294,7 @@ export interface Synthesizer {
         lang: SpeechLang;
         speaker?: number;
         speed?: number;
-        steady?: boolean;
+        steadiness?: number;
     }): Promise<Clip>;
 }
 

@@ -17,15 +17,18 @@ import { splitSentences, sentenceAt, detectLang, type SentenceSpan, type SpeechL
 export interface Clip { samples: Float32Array; sampleRate: number }
 /** 控制器向引擎要的唯一一件事。 */
 /** speaker = 一个模型里有几个说话人时的编号（缺省 0）。没有可念的内容（只有标点）→ 长度 0 的一段，控制器跳过这一句。 */
-export interface Synthesizer { synth(text: string, opts: { lang: SpeechLang; speaker?: number; speed?: number; steady?: boolean }): Promise<Clip> }
+export interface Synthesizer { synth(text: string, opts: { lang: SpeechLang; speaker?: number; speed?: number; steadiness?: number }): Promise<Clip> }
 /** 正在播的一段：done 在播完或被 stop 时兑现（true = 自然播完，false = 被停）。 */
 export interface Playback { done: Promise<boolean>; stop(): void; pause(): void; resume(): void }
 /** 喇叭：给一段声音，开始播。 */
 export interface AudioSink { play(clip: Clip): Playback }
 
 export type ReadAloudState = "idle" | "loading" | "playing" | "paused";
-/** steady = 实验念法：采样噪声小 + 稍慢（后端支持才生效，sherpa 忽略）。 */
-export interface ReadAloudOptions { lang?: SpeechLang; speaker?: number; speed?: number; steady?: boolean; once?: boolean }
+/**
+ * steadiness = 实验念法，0（原样，默认）… 1（平稳：采样噪声小 + 稍慢），中间连续可调；后端支持才生效，sherpa 忽略。
+ * steady: true = steadiness 1（0.1.9 的开关，留着兼容）。
+ */
+export interface ReadAloudOptions { lang?: SpeechLang; speaker?: number; speed?: number; steadiness?: number; steady?: boolean; once?: boolean }
 export interface ReadAloudDeps {
   engine: Synthesizer;
   sink: AudioSink;
@@ -62,6 +65,12 @@ export interface ReadAloud {
   on<K extends keyof ReadAloudEvents>(ev: K, cb: ReadAloudEvents[K]): () => void;
 }
 
+/** 选项里的念法 → 0…1 的一个数（steady: true = 1，都没给 = 0）。 */
+function steadinessOf(o: ReadAloudOptions): number {
+  const v = typeof o.steadiness === "number" && Number.isFinite(o.steadiness) ? o.steadiness : o.steady ? 1 : 0;
+  return Math.min(1, Math.max(0, v));
+}
+
 export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
   const lookahead = Math.max(0, deps.lookahead ?? 2);
   const gapS = deps.sentenceGapMs ?? 600, gapP = deps.paragraphGapMs ?? 900;
@@ -83,7 +92,7 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
     if (!p) {
       const sp = spans[i]!;
       const mine = clips, got = ready;
-      p = deps.engine.synth(text.slice(sp.start, sp.end), { lang, speaker: opts.speaker, speed: opts.speed, steady: opts.steady });
+      p = deps.engine.synth(text.slice(sp.start, sp.end), { lang, speaker: opts.speaker, speed: opts.speed, steadiness: steadinessOf(opts) });
       p.then((c) => { if (mine === clips && mine.get(i) === p) got.set(i, c); }, () => { if (mine.get(i) === p) mine.delete(i); });   // 失败的不留：下次再点重算
       clips.set(i, p);
     }
@@ -135,7 +144,7 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
     start(t, from, o = {}) {
       halt();
       if (t !== text) { text = t; spans = splitSentences(t); dropClips(); }
-      else if (o.speaker !== opts.speaker || o.steady !== opts.steady || o.speed !== opts.speed || (o.lang ?? lang) !== lang) dropClips();   // 换了音色 / 语速 / 语言：旧的合成结果不能用
+      else if (o.speaker !== opts.speaker || steadinessOf(o) !== steadinessOf(opts) || o.speed !== opts.speed || (o.lang ?? lang) !== lang) dropClips();   // 换了音色 / 语速 / 语言：旧的合成结果不能用
       opts = o; lang = o.lang ?? detectLang(t); continuous = !o.once;
       const i = sentenceAt(spans, from);
       if (i < 0) { index = -1; setState("idle"); if (continuous) emit("end"); return; }

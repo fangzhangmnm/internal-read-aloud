@@ -4,6 +4,7 @@
 // user 2026-10-01 真机三条：「“可是船上有奶牛呀！”苏一边跑一边说，这里没有好好断句」「these--first, --没断句」「逗号上引号的断句呢，有没有系统的解决枚举办法」
 import { describe, it, eq } from "./runner.mjs";
 import { splitClauses, splitClausesDetailed, PAUSE_MS, stripMarkup } from "../backend/piper-plus/text.js";
+import { blendScales } from "../backend/piper-plus/index.js";
 
 /** 画成一行好对：`小句⟨停顿类型⟩ | 小句⟨…⟩` */
 const show = (t, n) => splitClausesDetailed(t, n).map((p) => `${p.text}⟨${p.kind}⟩`).join(" | ");
@@ -59,5 +60,10 @@ describe("backend/piper-plus 句内断句（标点簇查表）", () => {
     eq(stripMarkup(line).startsWith("一个信使"), true);
     eq(show(stripMarkup(line), 5), "一个信使满头大汗，⟨weak⟩ | 一边跑一边大喊：⟨intro⟩ | “好消息！⟨strong⟩ | 坏消息！⟨strong⟩ | 快来看啊！”⟨strong⟩ | 他在人群中转圈乱跑，⟨weak⟩ | 大声喊着：⟨intro⟩ | “拿撒勒人耶稣被抓了！⟨strong⟩ | 拿撒勒人耶稣被抓了！”⟨end⟩");
     eq(stripMarkup("a</s> <br>b <|endoftext|> 3 < 5 > 2"), "a b  3 < 5 > 2");
+  });
+  it("念法插值：0 = 原样 0.667 / 1.5 / 0.5，1 = 平稳 0.333 / 1.7 / 0，0.5 在正中，越界夹住", () => {
+    const r = (o) => [o.noiseScale, o.lengthScale, o.noiseW].map((x) => +x.toFixed(4)).join("/");
+    eq(r(blendScales(0)), "0.667/1.5/0.5"); eq(r(blendScales(1)), "0.333/1.7/0"); eq(r(blendScales(0.5)), "0.5/1.6/0.25");
+    eq(r(blendScales(-3)), r(blendScales(0))); eq(r(blendScales(9)), r(blendScales(1)));
   });
 });

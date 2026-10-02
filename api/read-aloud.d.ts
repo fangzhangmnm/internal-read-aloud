@@ -150,11 +150,15 @@ export declare interface ReadAloudEvents {
     error: (e: Error) => void;
 }
 
-/** steady = 实验念法：采样噪声小 + 稍慢（后端支持才生效，sherpa 忽略）。 */
+/**
+ * steadiness = 实验念法，0（原样，默认）… 1（平稳：采样噪声小 + 稍慢），中间连续可调；后端支持才生效，sherpa 忽略。
+ * steady: true = steadiness 1（0.1.9 的开关，留着兼容）。
+ */
 export declare interface ReadAloudOptions {
     lang?: SpeechLang;
     speaker?: number;
     speed?: number;
+    steadiness?: number;
     steady?: boolean;
     once?: boolean;
 }
@@ -256,7 +260,7 @@ export declare interface Synthesizer {
         lang: SpeechLang;
         speaker?: number;
         speed?: number;
-        steady?: boolean;
+        steadiness?: number;
     }): Promise<Clip>;
 }
 

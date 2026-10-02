@@ -43,7 +43,7 @@ export type Request =
   | { id: number; op: "delete"; slugs: string[] }
   /** key = 门面给这次装载起的名字（同名再装 = 已经装着）。 */
   | { id: number; op: "load"; engine: string; key: string; slugs: string[] }
-  | { id: number; op: "synth"; text: string; lang: SpeechLang; speaker: number; speed: number; steady: boolean }
+  | { id: number; op: "synth"; text: string; lang: SpeechLang; speaker: number; speed: number; steadiness: number }
   | { id: number; op: "unload" };
 
 export type Response =
