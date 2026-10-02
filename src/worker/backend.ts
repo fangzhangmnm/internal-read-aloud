@@ -25,6 +25,6 @@ export interface BackendInfo {
 export interface Backend {
   load(ctx: BackendLoadContext): Promise<BackendInfo>;
   /** 一句进、一段出。没有可念的内容（只有标点 / 不认识的符号）→ 长度 0 的一段。 */
-  synth(text: string, o: { lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean; preset: number }): Clip | Promise<Clip>;
+  synth(text: string, o: { lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean; preset?: number }): Clip | Promise<Clip>;
   unload(): void | Promise<void>;
 }

@@ -190,8 +190,10 @@ try {
   check("中文一句：有声音、时长合理", zh.sec > 2 && zh.sec < 9 && zh.rms > 0.01, JSON.stringify(zh));
   const en2 = await page.evaluate(() => window.e2e.synth("The quick brown fox jumps over the lazy dog.", "en"));
   check("英语一句（全语言装载下）：时长和只装英语时同一量级（每一遍有随机差异，量到过 2.1–2.9 秒）", en2.sec > e1.sec * 0.55 && en2.sec < e1.sec * 1.8 && en2.rms > 0.01, `${en2.sec} vs ${e1.sec}`);
-  const fast = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { speed: 1.25 }));
-  check("语速 1.25：这一句变短（应是 0.8 倍左右；每一遍有随机差异，门槛放在 0.97）", fast.sec < ja.sec * 0.97, `${fast.sec} vs ${ja.sec}`);
+  // 念法 1 = 时长没有随机（noise_w 0）：比得出确定的结果（原来用随机时长比、门槛 0.97，2026-10-02 抖过一次：1.25 倍反而长了 3 %）
+  const jaSteady = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { steadiness: 1 }));
+  const fast = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { speed: 1.25, steadiness: 1 }));
+  check("语速 1.25：这一句变短（时长确定时应是 0.8 倍左右，门槛 0.9）", fast.sec < jaSteady.sec * 0.9 && fast.sec > jaSteady.sec * 0.7, `${fast.sec} vs ${jaSteady.sec}`);
   const zhFast = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { speed: 1.5, whole: false }));
   check("整句合成关：小句之间垫的静音跟着语速缩：1 倍速 250 ms，1.5 倍速 167 ms", Math.abs(zh.silenceMs - 250) <= 8 && Math.abs(zhFast.silenceMs - 167) <= 8, `${zh.silenceMs} / ${zhFast.silenceMs}`);
   const st1 = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh", { steadiness: 1, whole: false }));
@@ -261,6 +263,14 @@ try {
     const j0 = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { steadiness: 1, preset: 0 }));
     const j15 = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja", { steadiness: 1, preset: 15 }));
     check("预设 · 日语：0 和 15 一样长（日语那一行每档都没动）", j0.sec === j15.sec && j0.rms > 0.01, `${j0.sec} / ${j15.sec}`);
+  }
+  if (existsSync(join(LOCAL, "work/model-langemb/tsukuyomi-chan-zhen.onnx")) && existsSync(join(LOCAL, "work/model-langemb/tsukuyomi-chan-zhen.config.json"))) {
+    // 月读（中英增强）：config.json "preset_default": { "zh": 3, "en": 9 }——没给预设时按每一段的语言取（user 2026-10-02「然后字段是"preset_default": { "zh": 3, "en": 9 }同意」）
+    const zl = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-chan-zhen.onnx", "config.json": "/local/work/model-langemb/tsukuyomi-chan-zhen.config.json" }), TV);
+    const Z = (s, l, p) => page.evaluate(([s, l, p]) => window.e2e.synth(s, l, { steadiness: 1, whole: false, ...(p === undefined ? {} : { preset: p }) }), [s, l, p]);
+    const zs = "两个人也不是很会野外生存。", es = "The children ran outside to play in the garden.", js = "森の中で、小さな女の子が赤い花を見つけました。";
+    const [zD, z3, z0, eD, e9, jD, j0z] = [await Z(zs, "zh"), await Z(zs, "zh", 3), await Z(zs, "zh", 0), await Z(es, "en"), await Z(es, "en", 9), await Z(js, "ja"), await Z(js, "ja", 0)];
+    check("月读（中英增强）：不给预设 = config 的默认（中文 = 3、英文 = 9、日文 = 0）；给 0 = 原版（和默认不一样长）", !zl.error && zl.preset === true && zD.sec === z3.sec && eD.sec === e9.sec && jD.sec === j0z.sec && z0.sec !== zD.sec, `zh ${zD.sec}/${z3.sec}/${z0.sec} en ${eD.sec}/${e9.sec} ja ${jD.sec}/${j0z.sec} ${JSON.stringify(zl)}`);
   } else console.log("  （检疫桶里没有 preset16 模型，跳过预设那几条）");
   const back = await page.evaluate((v) => window.e2e.engine.load(v), TV);
   const back1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
@@ -307,6 +317,20 @@ try {
   check("另一个音色也删：没装的音色不占着共用包，运行时和英语词典这下没了（它的权重包 zh-test 还装着在用，留着）", afterDel2[0] === 0 && afterDel2[1] === packs[ZH].bytes, JSON.stringify(afterDel2));
   await page.evaluate((v) => window.e2e.engine.delete(v), ZV);
   check("zh-test 也删：全没了", await page.evaluate(async (v) => (await window.e2e.engine.status(v)).bytesCached === 0, OV));
+  // 没下官方权重也能用本地模型（user 2026-10-02「没有下载官方模型的时候，本地模型加载了还是没法启用语音」）：.onnx + .json 把权重包整个顶替 →
+  // 只要运行时和那种语言的词典
+  if (existsSync(join(LOCAL, "work/model-langemb/tsukuyomi-chan-zhen.config.json"))) {
+    const OVN = ["model.onnx", "config.json"], before0 = chunkFetches;
+    const dOnly = await page.evaluate(([v, o]) => window.e2e.engine.download(v, "/tsu", { langs: ["zh"], override: o }), [TV, OVN]);
+    const plain = await page.evaluate((v) => window.e2e.engine.status(v), TV);
+    check("本地模型顶替了整个权重包：只下运行时 + 中文词典（不取权重）；带 override 问 = 中文能念，不带问 = 还不能", chunkFetches - before0 === packs[tsuDef.packs[1]].chunks + packs[tsuDef.langPacks.zh[0]].chunks && dOnly.langs.join() === "zh" && plain.langs.length === 0, `${chunkFetches - before0} chunks; with ${JSON.stringify(dOnly.langs)} plain ${JSON.stringify(plain.langs)}`);
+    const lOnly = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-chan-zhen.onnx", "config.json": "/local/work/model-langemb/tsukuyomi-chan-zhen.config.json" }, ["zh"]), TV);
+    const zOnly = lOnly.error ? null : await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh"));
+    check("没有官方权重：本地 .onnx + .json 装得上、念得出中文", !lOnly.error && lOnly.langs.join() === "zh" && zOnly && zOnly.rms > 0.01, JSON.stringify(lOnly) + JSON.stringify(zOnly));
+    const lHalf = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-chan-zhen.onnx" }, ["zh"]), TV);
+    check("没有官方权重、只给 .onnx（配置还得从权重包拿）→ pack-missing", lHalf.error === "pack-missing", JSON.stringify(lHalf));
+    await page.evaluate((v) => window.e2e.engine.delete(v), TV);
+  } else console.log("  （检疫桶里没有增强版的配置，跳过「没下官方权重」那几条）");
 
   // ── 按哈希导入：五个包的分片文件名撞名（四个都叫 chunk-000），外加清单文件 ──
   const impT = await page.evaluate(async (v) => { const files = await window.e2e.voiceFiles(v); const st = await window.e2e.engine.importFiles(v, files); return { n: files.length, names: [...new Set(files.map((f) => f.name))].join(","), ready: st.ready, langs: st.langs }; }, TV);

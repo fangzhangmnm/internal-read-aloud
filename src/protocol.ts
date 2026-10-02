@@ -45,9 +45,9 @@ export type Request =
   | { id: number; op: "download"; slugs: string[]; base: string }
   | { id: number; op: "import"; slugs: string[]; files: File[] }
   | { id: number; op: "delete"; slugs: string[] }
-  /** key = 门面给这次装载起的名字（同名再装 = 已经装着）。override = 宿主给的替换文件（本地模型），只替换包里已有的文件名。 */
-  | { id: number; op: "load"; engine: string; key: string; slugs: string[]; override?: { name: string; data: Blob }[] }
-  | { id: number; op: "synth"; text: string; lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean; preset: number }
+  /** key = 门面给这次装载起的名字（同名再装 = 已经装着）。override = 宿主给的替换文件（本地模型），只替换包里已有的文件名；free = 被整个顶替、没装的包里的文件名（直接放进去）。 */
+  | { id: number; op: "load"; engine: string; key: string; slugs: string[]; override?: { name: string; data: Blob }[]; free?: string[] }
+  | { id: number; op: "synth"; text: string; lang: SpeechLang; speaker: number; speed: number; steadiness: number; whole: boolean; preset?: number }
   | { id: number; op: "unload" };
 
 export type Response =

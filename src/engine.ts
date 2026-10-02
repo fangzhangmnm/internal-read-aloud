@@ -9,7 +9,7 @@
 // 宿主只打它用得上的那几个。同一时刻只有一个音色装在引擎里；换到另一种引擎的音色时，前一个 worker 直接关掉还内存。
 import type { SpeechLang } from "./sentences.ts";
 import type { Clip, Synthesizer } from "./read-aloud.ts";
-import { voiceLangs, voicePacks, type EmbeddedPack, type VoiceDef } from "./packs.ts";
+import { logicalName, voiceLangs, voicePacks, type EmbeddedPack, type VoiceDef } from "./packs.ts";
 import type { Request, Response, PackProgress, PackStatus, VoiceStatus, LoadResult, WorkerLoadResult, WorkerInit } from "./protocol.ts";
 
 /** 一个 worker 脚本：url 由宿主 build 注入（带 hash）；type 缺省 classic。 */
@@ -27,12 +27,16 @@ export interface SpeechEngineDeps {
   cacheName?: string;
 }
 export interface SpeechEngine extends Synthesizer {
-  status(voice: string): Promise<VoiceStatus>;
+  /**
+   * override = 本地模型会换掉的文件名（同 load 的 override 的键）：文件全被换掉的包算「有了」——比如 `.onnx` + `.json` 换掉了整个权重包，
+   * 没下官方权重也能念（user 2026-10-02「没有下载官方模型的时候，本地模型加载了还是没法启用语音」）。
+   */
+  status(voice: string, opts?: { override?: readonly string[] }): Promise<VoiceStatus>;
   /**
    * 从 base（模型源，如 https://…/pwa-models）下载并逐片校验。可续传；已经有的包（别的音色、同源的兄弟 app 下过的）不重下。
    * langs = 只下这几种语言要的包；不给 = 这个音色的全部语言。进度按「这次要的所有包」的总字节报。
    */
-  download(voice: string, base: string, opts?: { langs?: readonly SpeechLang[]; onProgress?: (p: PackProgress) => void }): Promise<VoiceStatus>;
+  download(voice: string, base: string, opts?: { langs?: readonly SpeechLang[]; override?: readonly string[]; onProgress?: (p: PackProgress) => void }): Promise<VoiceStatus>;
   /** 用户自己拿到的文件（任意个包的分片，或整包一个文件）：按内容哈希认领，验过才入缓存。文件名不作数。 */
   importFiles(voice: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<VoiceStatus>;
   /** 删掉这个音色的包；宿主内嵌的别的音色里、已经装着的那些还要用的包留着（运行时、共用的词典）。同源兄弟 app 是否在用看不见：它那边会显示「未下载」，重下即可。 */
@@ -41,8 +45,9 @@ export interface SpeechEngine extends Synthesizer {
    * 把音色装进引擎（首次几秒）。synth 之前必须先 load。
    * langs = 只装这几种语言（省内存：日语前端固定占 160 MB）；不给 = 已经下好的全部语言。必装的包不齐、或点名的语言一种都没下 → 拒绝，错误信息 "pack-missing"。
    * override = 本地模型（user 2026-10-02「加一个本地上传的模型，这样我们改权重可以拖到网页上测试，而不用动远端」）：音色包里的文件名
-   *   → 用户自己的文件，这次装载用它代替包里那份（piper-plus：`model.onnx`、`config.json`）。只能换已有的文件；不进缓存、不校验哈希、
-   *   不跨装载留着——下一次 load 不带 override 就换回包里的。换进来的配置和音色的音素表对不上 → 拒绝，错误信息以 "override-mismatch" 开头。
+   *   → 用户自己的文件，这次装载用它代替包里那份（piper-plus：`model.onnx`、`config.json`）。只能换这个音色的包里有的文件名；文件全被换掉、
+   *   又没下载的包不用下载、不装（0.1.18；下载了的照装，好拿原配置来核对）；不进缓存、不校验哈希、不跨装载留着——下一次 load 不带 override 就换回包里的。换进来的配置和音色的音素表对不上
+   *   → 拒绝，错误信息以 "override-mismatch" 开头（包没下、没有原配置可比时不比）。
    */
   load(voice: string, opts?: { langs?: readonly SpeechLang[]; override?: Readonly<Record<string, Blob>> }): Promise<LoadResult>;
   /** 现在装着哪个音色、哪几种语言、换了哪些本地文件；没有 = null。 */
@@ -111,12 +116,19 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
     try { const v = voiceOf(voice); return send<T>(channel(v.engine), make(v), onProgress); }
     catch (e) { return Promise.reject(asError(e)); }
   }
-  /** 几个包的状态 → 这个音色的状态。 */
-  function summarize(v: VoiceDef, packs: PackStatus[]): VoiceStatus {
-    const ready = (slugs: readonly string[]) => slugs.every((s) => packs.find((p) => p.slug === s)?.ready === true);
+  /** 这个音色的包里，文件全被本地文件顶替的那些（不用下载、不用装）。 */
+  function covered(v: VoiceDef, names: readonly string[] | undefined): Set<string> {
+    const set = new Set(names ?? []), out = new Set<string>();
+    if (!set.size) return out;
+    for (const slug of voicePacks(v)) { const files = deps.packs[slug]?.manifest.files ?? []; if (files.length && files.every((f) => set.has(logicalName(f.path)))) out.add(slug); }
+    return out;
+  }
+  /** 几个包的状态 → 这个音色的状态（被本地文件全部顶替的包算有）。 */
+  function summarize(v: VoiceDef, packs: PackStatus[], skip: Set<string> = new Set()): VoiceStatus {
+    const ready = (slugs: readonly string[]) => slugs.every((s) => skip.has(s) || packs.find((p) => p.slug === s)?.ready === true);
     const st: VoiceStatus = {
       voice: v.id,
-      ready: packs.every((p) => p.ready),
+      ready: packs.every((p) => p.ready || skip.has(p.slug)),
       langs: ready(v.packs) ? voiceLangs(v).filter((l) => ready(v.langPacks[l] ?? [])) : [],
       bytesCached: packs.reduce((a, p) => a + p.bytesCached, 0),
       bytesTotal: packs.reduce((a, p) => a + p.bytesTotal, 0),
@@ -125,11 +137,13 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
     known.set(v.id, st);
     return st;
   }
-  const status = (voice: string) => call<PackStatus[]>((v) => ({ op: "status", slugs: voicePacks(v) }), voice).then((packs) => summarize(deps.voices[voice]!, packs));
+  const status = (voice: string, opts?: { override?: readonly string[] }) => call<PackStatus[]>((v) => ({ op: "status", slugs: voicePacks(v) }), voice)
+    .then((packs) => summarize(deps.voices[voice]!, packs, covered(deps.voices[voice]!, opts?.override)));
 
   return {
     status,
-    download: (voice, base, opts) => call<PackStatus[]>((v) => ({ op: "download", slugs: voicePacks(v, opts?.langs), base }), voice, opts?.onProgress).then(() => status(voice)),
+    download: (voice, base, opts) => call<PackStatus[]>((v) => { const skip = covered(v, opts?.override); return { op: "download", slugs: voicePacks(v, opts?.langs).filter((s) => !skip.has(s)), base }; }, voice, opts?.onProgress)
+      .then(() => status(voice, { override: opts?.override })),
     importFiles: (voice, files, onProgress) => call<PackStatus[]>((v) => ({ op: "import", slugs: voicePacks(v), files }), voice, onProgress)
       .then(() => status(voice), (e) => status(voice).then(() => { throw e; }, () => { throw e; })),   // 部分认领成功也要把账记对
     async delete(voice) {
@@ -152,16 +166,20 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
     },
     async load(voice, opts) {
       const v = voiceOf(voice);
-      const st = await status(voice);
+      const names = Object.keys(opts?.override ?? {});
+      const st = await status(voice, { override: names });
+      // skip only a covered pack that is NOT downloaded: a downloaded one is still loaded, so the replaced config can be checked against it
+      const skip = new Set([...covered(v, names)].filter((s) => !st.packs.find((p) => p.slug === s)?.ready));
       const langs = (opts?.langs ?? voiceLangs(v)).filter((l) => st.langs.includes(l));
       if (!langs.length) throw new Error("pack-missing");
       for (const other of [...channels.keys()]) if (other !== v.engine) closeChannel(other, "switched to a voice of another engine");
-      const slugs = voicePacks(v, langs);
+      const slugs = voicePacks(v, langs).filter((s) => !skip.has(s));
+      const free = [...skip].flatMap((s) => deps.packs[s]!.manifest.files.map((f) => logicalName(f.path)));   // files of skipped packs: added, not replaced
       const ov = Object.entries(opts?.override ?? {}).sort(([x], [y]) => (x < y ? -1 : 1));
       const tag = ov.map(([n, b]) => { const f = b as Partial<File>; return `${n}=${f.name ?? ""}:${b.size}:${f.lastModified ?? ""}`; }).join(";");   // a different file -> a different load
       const override = ov.map(([name, data]) => ({ name, data }));
       let r: WorkerLoadResult;
-      try { r = await send<WorkerLoadResult>(channel(v.engine), { op: "load", engine: v.engine, key: `${voice}|${slugs.join(",")}|${tag}`, slugs, ...(override.length ? { override } : {}) }); }
+      try { r = await send<WorkerLoadResult>(channel(v.engine), { op: "load", engine: v.engine, key: `${voice}|${slugs.join(",")}|${tag}`, slugs, ...(override.length ? { override, free } : {}) }); }
       catch (e) { current = null; throw e; }   // the worker dropped the previous load before trying this one
       const got = r.langs ? langs.filter((l) => r.langs!.includes(l)) : langs;
       current = { voice, langs: got, override: override.map((o) => o.name), preset: r.preset === true };
@@ -171,7 +189,7 @@ export function createSpeechEngine(deps: SpeechEngineDeps): SpeechEngine {
     isKnownReady(voice, lang) { const st = known.get(voice); return st ? (lang ? st.langs.includes(lang) : st.langs.length > 0) : undefined; },
     synth(text: string, o: { lang: SpeechLang; speaker?: number; speed?: number; steadiness?: number; whole?: boolean; preset?: number }) {
       if (!current) return Promise.reject(new Error("no voice loaded"));
-      return call<Clip>(() => ({ op: "synth", text, lang: o.lang, speaker: o.speaker ?? 0, speed: o.speed ?? 1, steadiness: Math.min(1, Math.max(0, Number.isFinite(o.steadiness) ? o.steadiness! : 0)), whole: o.whole !== false, preset: Number.isFinite(o.preset) ? Math.trunc(o.preset!) : 0 }), current.voice);
+      return call<Clip>(() => ({ op: "synth", text, lang: o.lang, speaker: o.speaker ?? 0, speed: o.speed ?? 1, steadiness: Math.min(1, Math.max(0, Number.isFinite(o.steadiness) ? o.steadiness! : 0)), whole: o.whole !== false, preset: Number.isFinite(o.preset) ? Math.trunc(o.preset!) : undefined }), current.voice);
     },
     dispose() { for (const engine of [...channels.keys()]) closeChannel(engine, "read-aloud engine disposed"); current = null; },
   };

@@ -106,8 +106,9 @@ const jsonOf = (files, name) => JSON.parse(new TextDecoder().decode(bytesOf(file
  * @property {boolean} [steady]  same as steadiness 1 (kept from 0.1.9)
  * @property {boolean} [whole]   zh / en: one model pass per language run, pause token + padded silence at the junctions (whole.js);
  *   default false = each clause piece alone (ja is always whole)
- * @property {number} [preset]   the user's preset, a signed int (default 0): fed to models that declare a `preset` input (family
- *   convention: the model decides what it means); ignored by models without one
+ * @property {number} [preset]   the user's preset, a signed int: fed to models that declare a `preset` input (family convention:
+ *   the model decides what it means); ignored by models without one. Not given = the model's default for that piece's language
+ *   (config.json "preset_default": { "zh": 3, "en": 9 }; a language not listed = 0)
  *
  * @typedef {Object} SynthResult
  * @property {Float32Array} samples   mono, −1 … 1, peak-normalised; length 0 when the text has nothing pronounceable
@@ -172,7 +173,10 @@ export function createPiperPlusBackend() {
       g2p.zh = (text) => questionThenEos(parts.zh.encode(normalizeZhNumbers(text), map), map);
     }
     const langs = ["ja", "en", "zh"].filter((l) => g2p[l]);
-    state = { vits, session, config, g2p, langs, ojt };
+    // per-language default preset (owner 2026-10-02「然后字段是"preset_default": { "zh": 3, "en": 9 }同意」): integers only
+    const presetDefault = {};
+    for (const [l, v] of Object.entries(config.preset_default ?? {})) if (Number.isInteger(v)) presetDefault[l] = v;
+    state = { vits, session, config, g2p, langs, ojt, presetDefault };
     return { sampleRate: vits.sampleRate, voices: 1, langs: langs.slice(), preset: vits.hasPreset };
   }
 
@@ -185,7 +189,8 @@ export function createPiperPlusBackend() {
       const speed = Math.min(4, Math.max(0.25, Number.isFinite(o.speed) && o.speed > 0 ? o.speed : 1));
       const base = blendScales(Number.isFinite(o.steadiness) ? o.steadiness : o.steady ? 1 : 0);
       const scales = { ...base, lengthScale: base.lengthScale / speed };
-      const preset = Number.isFinite(o.preset) ? Math.max(-2147483648, Math.min(2147483647, Math.trunc(o.preset))) : 0;   // a signed 32-bit int
+      const userPreset = Number.isFinite(o.preset) ? Math.max(-2147483648, Math.min(2147483647, Math.trunc(o.preset))) : undefined;   // a signed 32-bit int
+      const presetFor = (l) => userPreset ?? state.presetDefault[l] ?? 0;
       const sr = state.vits.sampleRate, str = stripMarkup(String(text ?? ""));
       const pieces = lang === "ja" ? [{ text: str, pauseMs: 0 }] : splitClausesDetailed(str, MIN_CLAUSE_CHARS[lang] ?? 20);
       // segments = what is synthesized one by one: clause pieces, and inside a Chinese piece the English words cut out of it
@@ -216,7 +221,7 @@ export function createPiperPlusBackend() {
         const joined = g.length > 1 ? joinPieces(g) : null;
         const parts = joined ? [{ ...joined, lang: g[0].lang, text: g.map((e) => e.text).join("") }] : g;
         for (const part of parts) {
-          const r = await state.vits.synthIds(part.ids, part.pros, part.lang, scales, part.marks ? part.marks.map((m) => m.index) : undefined, preset);
+          const r = await state.vits.synthIds(part.ids, part.pros, part.lang, scales, part.marks ? part.marks.map((m) => m.index) : undefined, presetFor(part.lang));
           let samples = r.samples, padded;
           if (part.marks) ({ samples, padded } = padSilence(samples, sr, part.marks.map((m, k) => ({ ...r.marks[k], pauseMs: m.pauseMs })), speed));
           clips.push(samples);

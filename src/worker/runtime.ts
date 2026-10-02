@@ -196,7 +196,7 @@ async function readPack(slug: string, files: Map<string, Uint8Array>): Promise<P
  * override = 宿主给的本地文件（user 2026-10-02「加一个本地上传的模型，这样我们改权重可以拖到网页上测试，而不用动远端」）：
  * 只能替换这个音色的包里已经有的文件名；只在这次装载时用，不进缓存、不校验哈希（是用户自己手上的文件）。
  */
-async function load(engine: string, key: string, slugs: string[], override: { name: string; data: Blob }[] = []): Promise<WorkerLoadResult> {
+async function load(engine: string, key: string, slugs: string[], override: { name: string; data: Blob }[] = [], free: string[] = []): Promise<WorkerLoadResult> {
   if (loaded?.key === key) return { alreadyLoaded: true, createMs: 0, ...loaded.info };
   const make = BACKENDS[engine];
   if (!make) throw new Error(`this worker has no backend for engine "${engine}"`);
@@ -208,8 +208,8 @@ async function load(engine: string, key: string, slugs: string[], override: { na
   try {
     for (const o of override) {
       const was = files.get(o.name);
-      if (!was) throw new Error(`override: this voice has no file "${o.name}" (only files it already has can be replaced)`);
-      replaced.set(o.name, was);
+      if (!was && !free.includes(o.name)) throw new Error(`override: this voice has no file "${o.name}" (only files it already has can be replaced)`);
+      if (was) replaced.set(o.name, was);
       files.set(o.name, new Uint8Array(await o.data.arrayBuffer()));
     }
   } catch (e) { files.clear(); throw e; }
@@ -242,7 +242,7 @@ function onMessage(e: MessageEvent<Request>): void {
         case "download": result = await downloadAll(req.slugs, req.base, progress); break;
         case "import": result = await importFiles(req.slugs, req.files, progress); break;
         case "delete": for (const slug of req.slugs) await deletePack(slug); break;
-        case "load": result = await load(req.engine, req.key, req.slugs, req.override); break;
+        case "load": result = await load(req.engine, req.key, req.slugs, req.override, req.free); break;
         case "synth": {
           if (!loaded) throw new Error("no voice loaded");
           const clip = await loaded.backend.synth(req.text, { lang: req.lang, speaker: req.speaker, speed: req.speed, steadiness: req.steadiness, whole: req.whole, preset: req.preset });

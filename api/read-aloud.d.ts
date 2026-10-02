@@ -177,7 +177,8 @@ export declare interface ReadAloudEvents {
  *   一次交给模型，小句之间放模型自己认得的停顿记号、再补静音到该有的长度；false = 每个小句单独合成再接起来（0.1.12 及以前的做法）。
  *   日语本来就整句；后端支持才生效，sherpa 忽略。
  * preset = 预设（家族约定，user 2026-10-02「我们统一加一个预设的约定，onnx可以实现可以不实现，输入就是一个用户键盘输入的signed int，
- *   然后模型随便解释」）：用户敲的带符号整数，原样交给模型；模型声明了 `preset` 输入才喂，没声明 = 忽略。默认 0。
+ *   然后模型随便解释」）：用户敲的带符号整数，原样交给模型；模型声明了 `preset` 输入才喂，没声明 = 忽略。
+ *   不给 = 模型自己的默认（piper-plus：config.json 的 "preset_default"，按每一段的语言取，没写的语言 = 0）。
  */
 export declare interface ReadAloudOptions {
     /** 整段文本都按这种语言念；不给 = 每句自己判。 */
@@ -234,13 +235,20 @@ export declare interface SherpaTtsEngineConfig {
 }
 
 export declare interface SpeechEngine extends Synthesizer {
-    status(voice: string): Promise<VoiceStatus>;
+    /**
+     * override = 本地模型会换掉的文件名（同 load 的 override 的键）：文件全被换掉的包算「有了」——比如 `.onnx` + `.json` 换掉了整个权重包，
+     * 没下官方权重也能念（user 2026-10-02「没有下载官方模型的时候，本地模型加载了还是没法启用语音」）。
+     */
+    status(voice: string, opts?: {
+        override?: readonly string[];
+    }): Promise<VoiceStatus>;
     /**
      * 从 base（模型源，如 https://…/pwa-models）下载并逐片校验。可续传；已经有的包（别的音色、同源的兄弟 app 下过的）不重下。
      * langs = 只下这几种语言要的包；不给 = 这个音色的全部语言。进度按「这次要的所有包」的总字节报。
      */
     download(voice: string, base: string, opts?: {
         langs?: readonly SpeechLang[];
+        override?: readonly string[];
         onProgress?: (p: PackProgress) => void;
     }): Promise<VoiceStatus>;
     /** 用户自己拿到的文件（任意个包的分片，或整包一个文件）：按内容哈希认领，验过才入缓存。文件名不作数。 */
@@ -251,8 +259,9 @@ export declare interface SpeechEngine extends Synthesizer {
      * 把音色装进引擎（首次几秒）。synth 之前必须先 load。
      * langs = 只装这几种语言（省内存：日语前端固定占 160 MB）；不给 = 已经下好的全部语言。必装的包不齐、或点名的语言一种都没下 → 拒绝，错误信息 "pack-missing"。
      * override = 本地模型（user 2026-10-02「加一个本地上传的模型，这样我们改权重可以拖到网页上测试，而不用动远端」）：音色包里的文件名
-     *   → 用户自己的文件，这次装载用它代替包里那份（piper-plus：`model.onnx`、`config.json`）。只能换已有的文件；不进缓存、不校验哈希、
-     *   不跨装载留着——下一次 load 不带 override 就换回包里的。换进来的配置和音色的音素表对不上 → 拒绝，错误信息以 "override-mismatch" 开头。
+     *   → 用户自己的文件，这次装载用它代替包里那份（piper-plus：`model.onnx`、`config.json`）。只能换这个音色的包里有的文件名；文件全被换掉、
+     *   又没下载的包不用下载、不装（0.1.18；下载了的照装，好拿原配置来核对）；不进缓存、不校验哈希、不跨装载留着——下一次 load 不带 override 就换回包里的。换进来的配置和音色的音素表对不上
+     *   → 拒绝，错误信息以 "override-mismatch" 开头（包没下、没有原配置可比时不比）。
      */
     load(voice: string, opts?: {
         langs?: readonly SpeechLang[];

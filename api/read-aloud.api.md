@@ -280,6 +280,7 @@ export interface SpeechEngine extends Synthesizer {
     dispose(): void;
     download(voice: string, base: string, opts?: {
         langs?: readonly SpeechLang[];
+        override?: readonly string[];
         onProgress?: (p: PackProgress) => void;
     }): Promise<VoiceStatus>;
     importFiles(voice: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<VoiceStatus>;
@@ -294,8 +295,9 @@ export interface SpeechEngine extends Synthesizer {
         override: string[];
         preset: boolean;
     } | null;
-    // (undocumented)
-    status(voice: string): Promise<VoiceStatus>;
+    status(voice: string, opts?: {
+        override?: readonly string[];
+    }): Promise<VoiceStatus>;
 }
 
 // @public (undocumented)

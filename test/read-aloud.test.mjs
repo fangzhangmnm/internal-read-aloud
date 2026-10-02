@@ -137,14 +137,15 @@ describe("createReadAloud", () => {
     r.ra.start(TEXT, 0, { once: true, steadiness: 7 }); eq(r.pendingSynth.length, 0, "clamped to 1");
     r.ra.start(TEXT, 0, { once: true }); eq(r.pendingSynth[0].o.steadiness, 0);
   });
-  it("预设（家族约定：用户敲的带符号整数）原样传给引擎；同一个预设复用合成好的句子，换了就重算；小数取整；不给 = 0", async () => {
+  it("预设（家族约定：用户敲的带符号整数）原样传给引擎；同一个预设复用合成好的句子，换了就重算；小数取整；不给 = undefined（模型自己的默认）", async () => {
     const r = rig();
     r.ra.start(TEXT, 0, { once: true, preset: 0xB }); eq(r.pendingSynth[0].o.preset, 11); await r.synthAll();
     r.ra.start(TEXT, 0, { once: true, preset: 11 }); eq(r.pendingSynth.length, 0, "same preset: cached clip reused");
     r.ra.start(TEXT, 0, { once: true, preset: -3 }); eq(r.pendingSynth.length, 1, "re-synthesised"); eq(r.pendingSynth[0].o.preset, -3); await r.synthAll();
     r.ra.start(TEXT, 0, { once: true, preset: -3.7 }); eq(r.pendingSynth.length, 0, "-3.7 truncates to -3");
-    r.ra.start(TEXT, 0, { once: true }); eq(r.pendingSynth[0].o.preset, 0); await r.synthAll();
-    r.ra.start(TEXT, 0, { once: true, preset: Number.NaN }); eq(r.pendingSynth.length, 0, "NaN = 0");
+    r.ra.start(TEXT, 0, { once: true }); eq(r.pendingSynth[0].o.preset, undefined); await r.synthAll();
+    r.ra.start(TEXT, 0, { once: true, preset: Number.NaN }); eq(r.pendingSynth.length, 0, "NaN = not given");
+    r.ra.start(TEXT, 0, { once: true, preset: 0 }); eq(r.pendingSynth.length, 1, "0 is a preset, not 'not given'"); eq(r.pendingSynth[0].o.preset, 0);
   });
   it("句间停顿跟着语速等比例缩：1.5 倍速 → 400 / 600 / 400", async () => {
     const r = rig();

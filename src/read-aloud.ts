@@ -35,7 +35,8 @@ export type ReadAloudState = "idle" | "loading" | "playing" | "paused";
  *   一次交给模型，小句之间放模型自己认得的停顿记号、再补静音到该有的长度；false = 每个小句单独合成再接起来（0.1.12 及以前的做法）。
  *   日语本来就整句；后端支持才生效，sherpa 忽略。
  * preset = 预设（家族约定，user 2026-10-02「我们统一加一个预设的约定，onnx可以实现可以不实现，输入就是一个用户键盘输入的signed int，
- *   然后模型随便解释」）：用户敲的带符号整数，原样交给模型；模型声明了 `preset` 输入才喂，没声明 = 忽略。默认 0。
+ *   然后模型随便解释」）：用户敲的带符号整数，原样交给模型；模型声明了 `preset` 输入才喂，没声明 = 忽略。
+ *   不给 = 模型自己的默认（piper-plus：config.json 的 "preset_default"，按每一段的语言取，没写的语言 = 0）。
  */
 export interface ReadAloudOptions {
   /** 整段文本都按这种语言念；不给 = 每句自己判。 */
@@ -81,8 +82,8 @@ export interface ReadAloud {
 }
 
 /** 选项里的念法 → 0…1 的一个数（steady: true = 1，都没给 = 0）。 */
-/** 预设：带符号整数，没给 / 不是数 = 0。 */
-function presetOf(o: ReadAloudOptions): number { return Number.isFinite(o.preset) ? Math.trunc(o.preset!) : 0; }
+/** 预设：带符号整数；没给 / 不是数 = undefined（用模型的默认）。 */
+function presetOf(o: ReadAloudOptions): number | undefined { return Number.isFinite(o.preset) ? Math.trunc(o.preset!) : undefined; }
 function steadinessOf(o: ReadAloudOptions): number {
   const v = typeof o.steadiness === "number" && Number.isFinite(o.steadiness) ? o.steadiness : o.steady ? 1 : 0;
   return Math.min(1, Math.max(0, v));
