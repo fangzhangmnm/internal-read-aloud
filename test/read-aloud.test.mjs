@@ -147,7 +147,7 @@ describe("createReadAloud", () => {
     for (let i = 0; i < 4; i++) { await r2.synthAll(); await r2.finishPlay(); }
     eq(JSON.stringify(r2.sleeps), JSON.stringify([750, 1125, 750]));
   });
-  it("不给 lang：每句自己判语言；中日混排的句子分段合成再接起来；判出来的语言没装就换成能用的", async () => {
+  it("不给 lang：每句自己判语言；中日混排的句子分段合成再接起来；判出来的语言没装 = 报错，不凑合", async () => {
     const langs = [];
     // 中日混排的一句：三段按顺序送进引擎，各带各的语言
     const rr = rig({});
@@ -157,10 +157,12 @@ describe("createReadAloud", () => {
     eq(langs.join(" | "), "zh:这个词读作 | ja:「せんせい」， | zh:意思是老师。");
     eq(rr.playbacks.length, 1, "one clip for the whole sentence");
     eq(rr.playbacks[0].clip.samples.length, 6, "the three runs (2 samples each) are joined into one clip (the fake sample rate 1 makes the gaps 0 samples)");
-    // 只装了中文：日语那段改用中文，三段并成一段
+    // 只装了中文：日语那段不拿中文凑合念，这一句报错（user「主语言替代朗读…不要这样，这是静默退化」）
     const r3 = rig();
     r3.ra.start("这个词读作「せんせい」，意思是老师。", 0, { once: true, langs: ["zh"] });
-    eq(r3.pendingSynth.length, 1); eq(r3.pendingSynth[0].o.lang, "zh"); eq(r3.pendingSynth[0].text, "这个词读作「せんせい」，意思是老师。");
+    await r3.settle();
+    eq(r3.pendingSynth.length, 0, "nothing synthesised"); eq(r3.playbacks.length, 0);
+    eq(r3.events.some((e) => e.startsWith("error:language not loaded: ja")), true, r3.events.join(","));
     // 给了 lang：整句一种语言（老行为）
     const r4 = rig();
     r4.ra.start("这个词读作「せんせい」，意思是老师。", 0, { once: true, lang: "ja" });

@@ -12,7 +12,8 @@
 //   · 任何时候 stop / 再 start / skip：旧的一轮立刻作废（代号 gen），它还没回来的合成结果回来也不播。
 //   · **新点的优先，任何时刻只有一段在响**：再 start / skip / stop 先掐掉正在响的那一段，再起新的。
 //   · **语言**：给了 lang = 整段文本都按这种语言念（老行为）。不给 = 每句自己判（lang-route.ts；user 2026-10-01「每句话路由不同的前端」）：
-//     一句里中日混排就切成几段分别合成、再接起来；langs = 宿主装好的语言，判出来的语言没装就改用主语言（主语言也没装就用 langs 第一个）。
+//     一句里中日混排就切成几段分别合成、再接起来；langs = 宿主装好的语言。**判出来的语言没装 = 这一句报错，不拿别的语言凑合**
+//     （user 2026-10-01「主语言替代朗读（日文会念不准）不要这样，这是静默退化」）——宿主应先用 langsIn 把要的语言都装上。
 import { splitSentences, sentenceAt, type SentenceSpan, type SpeechLang } from "./sentences.ts";
 import { contextLang, langRuns, type LangRun } from "./lang-route.ts";
 
@@ -113,17 +114,13 @@ export function createReadAloud(deps: ReadAloudDeps): ReadAloud {
     }
     return p;
   }
-  /** 这一句交给哪几种语言的前端：给了 lang 就整句一种；否则每句自己判，判出来的语言没装就换成能用的，相邻同语言的并起来。 */
+  /** 这一句交给哪几种语言的前端：给了 lang 就整句一种；否则每句自己判。判出来的语言不在 langs 里 = 报错（不悄悄换成别的语言念）。 */
   function routesFor(sentence: string): LangRun[] {
     if (opts.lang) return [{ lang: opts.lang, text: sentence }];
-    const allowed = opts.langs?.length ? opts.langs : null;
-    const fallback: SpeechLang = !allowed || allowed.includes(ctx) ? ctx : allowed[0]!;
-    const out: LangRun[] = [];
-    for (const r of langRuns(sentence, ctx)) {
-      const lang = !allowed || allowed.includes(r.lang) ? r.lang : fallback, last = out[out.length - 1];
-      if (last && last.lang === lang) last.text += r.text; else out.push({ lang, text: r.text });
-    }
-    return out;
+    const runs = langRuns(sentence, ctx), allowed = opts.langs?.length ? opts.langs : null;
+    const missing = allowed ? runs.map((r) => r.lang).filter((l) => !allowed.includes(l)) : [];
+    if (missing.length) throw new Error(`language not loaded: ${[...new Set(missing)].join(", ")} (sentence: ${sentence.slice(0, 40)})`);
+    return runs;
   }
   /** 合成一句：一段直接交给引擎；几段就一段一段合成，接起来，段间按交界处的标点留停顿（÷ 语速）。 */
   async function synthSentence(sentence: string): Promise<Clip> {

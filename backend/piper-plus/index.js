@@ -137,7 +137,10 @@ export function createPiperPlusBackend() {
         const tokens = [], prosody = [];
         for (const [lang, seg] of segmentText(text, langSet, { kana: true })) {
           const part = lang === "ja" ? parts.ja : lang === "en" ? parts.en : null;
-          if (!part) continue;
+          if (!part) {   // no silent skipping (owner 2026-10-01: a missing language must not degrade silently)
+            if (lang === "en") throw new Error(`piper-plus backend: language "en" is not available (English words inside Japanese: ${JSON.stringify(seg.slice(0, 30))})`);
+            continue;    // other scripts the Japanese frontend has nothing for (e.g. Cyrillic) are not a language this voice offers
+          }
           const r = part.phonemize(seg); tokens.push(...r.tokens); prosody.push(...r.prosody);
         }
         return encodeTokens(tokens, prosody, map);
@@ -166,7 +169,9 @@ export function createPiperPlusBackend() {
       // segments = what is synthesized one by one: clause pieces, and inside a Chinese piece the English words cut out of it
       const segments = [];
       for (const { text: piece, pauseMs } of pieces) {
-        const runs = lang === "zh" && state.g2p.en ? splitChineseEnglish(piece) : [{ lang, text: piece }];
+        const runs = lang === "zh" ? splitChineseEnglish(piece) : [{ lang, text: piece }];
+        const needEn = runs.find((r) => r.lang === "en");
+        if (needEn && !state.g2p.en) throw new Error(`piper-plus backend: language "en" is not available (English words inside Chinese: ${JSON.stringify(needEn.text.slice(0, 30))})`);
         runs.forEach((r, k) => segments.push({ lang: r.lang, text: r.text, pauseMs: k === runs.length - 1 ? pauseMs : RUN_GAP_MS }));
       }
       const clips = [], gaps = [], debug = [];   // gaps[i] = silence (samples) after clip i
