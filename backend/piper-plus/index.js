@@ -71,6 +71,19 @@ export function splitChineseEnglish(piece) {
   return runs.filter((r) => r.text.trim());
 }   // weak-break pieces shorter than this are glued; the pause lengths live in text.js (PAUSE_MS)
 
+/**
+ * A Chinese question must end `… ? _ $` like the reference runtime, Japanese and English do (owner 2026-10-02: 「“魔法师会不会突然出现？”…
+ * 问号的语气还是没有学会…可能是前端的问题？」). The zh encoder's default layout ends it `… _ ?` — the question id AS the EOS — and the
+ * EOS trim (vits.js) then cut exactly the question token's frames, i.e. the rise. Here a trailing question id gets `_ $` after it.
+ * Tsukuyomi-chan learned the question token from Japanese (`? $`); the base model's Chinese data (AISHELL-3) has no punctuation.
+ */
+export function questionThenEos(r, map) {
+  const q = new Set(["?", "?!", "?.", "?~"].flatMap((k) => map[k] ?? []).concat(["\ue016", "\ue017", "\ue018"].flatMap((k) => map[k] ?? [])));
+  const eos = map["$"]?.[0], pad = map["_"]?.[0];
+  if (eos === undefined || pad === undefined || !r.ids.length || !q.has(r.ids[r.ids.length - 1])) return r;
+  return { ids: [...r.ids, pad, eos], pros: [...r.pros, [0, 0, 0], [0, 0, 0]] };
+}
+
 const bytesOf = (files, name) => { const v = files.get(name); if (v === undefined) throw new Error(`piper-plus backend: "${name}" is missing from ctx.files`); return v instanceof Uint8Array ? v : new Uint8Array(v); };
 const jsonOf = (files, name) => JSON.parse(new TextDecoder().decode(bytesOf(files, name)));
 
@@ -156,7 +169,7 @@ export function createPiperPlusBackend() {
     }
     if (has("zh")) {
       parts.zh = createChineseG2p({ single: jsonOf(files, "zh/pinyin_single.tone3.json"), phrases: jsonOf(files, "zh/pinyin_phrases.tone3.json") });
-      g2p.zh = (text) => parts.zh.encode(normalizeZhNumbers(text), map);
+      g2p.zh = (text) => questionThenEos(parts.zh.encode(normalizeZhNumbers(text), map), map);
     }
     const langs = ["ja", "en", "zh"].filter((l) => g2p[l]);
     state = { vits, session, config, g2p, langs, ojt };

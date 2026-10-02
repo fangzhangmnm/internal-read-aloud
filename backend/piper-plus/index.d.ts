@@ -11,3 +11,5 @@ export interface PiperPlusBackend {
 export function createPiperPlusBackend(): PiperPlusBackend;
 /** 0 -> 原样的三个参数，1 -> 平稳的三个参数，中间线性插值（0…1 之外夹住）。 */
 export function blendScales(t: number): { noiseScale: number; lengthScale: number; noiseW: number };
+/** A Chinese question encoded `… _ ?` (the question id as EOS) → `… _ ? _ $` like the reference runtime; anything else unchanged. */
+export function questionThenEos(r: { ids: number[]; pros: number[][] }, map: Record<string, number[]>): { ids: number[]; pros: number[][] };

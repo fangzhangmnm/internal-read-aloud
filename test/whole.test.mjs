@@ -5,6 +5,7 @@ import { describe, it, eq as eqId, assert } from "./runner.mjs";
 const eq = (a, b, m) => eqId(JSON.stringify(a), JSON.stringify(b), m);   // runner 的 eq 按引用比
 import { joinPieces, padSilence } from "../backend/piper-plus/whole.js";
 import { checkReplacedConfig } from "../src/worker/piper-plus.ts";
+import { questionThenEos } from "../backend/piper-plus/index.js";
 
 const R = (n) => Array.from({ length: n }, () => [0, 0, 0]);
 const piece = (body, pauseMs) => { const ids = [1, 0, ...body.flatMap((x) => [x, 0]), 2]; return { ids, pros: R(ids.length), pauseMs }; };
@@ -80,5 +81,17 @@ describe("本地模型：换进来的 config.json 要和音色的音素表一模
   it("不是 JSON → 拒绝", () => {
     let msg = ""; try { checkReplacedConfig(enc(base), new TextEncoder().encode("not json")); } catch (e) { msg = e.message; }
     assert(msg.startsWith("override-mismatch"), msg);
+  });
+});
+
+describe("中文问句结尾 = `? _ $`（和参考实现、日语、英语一样；user 2026-10-02「问号的语气还是没有学会…可能是前端的问题？」）", () => {
+  const map = { _: [0], "^": [1], $: [2], "?": [3], "?!": [4], a: [57] };
+  it("问号被当成结束记号（`… _ ?`）→ 后面补 `_ $`；韵律行跟着补", () => {
+    const r = questionThenEos({ ids: [1, 0, 57, 0, 3], pros: [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]] }, map);
+    eq(r.ids, [1, 0, 57, 0, 3, 0, 2]); eq(r.pros.length, 7);
+  });
+  it("强调问句 ?! 也一样；本来就以 $ 结尾的不动", () => {
+    eq(questionThenEos({ ids: [1, 0, 57, 0, 4], pros: [[], [], [], [], []] }, map).ids, [1, 0, 57, 0, 4, 0, 2]);
+    eq(questionThenEos({ ids: [1, 0, 57, 0, 2], pros: [[], [], [], [], []] }, map).ids, [1, 0, 57, 0, 2]);
   });
 });
