@@ -128,3 +128,21 @@ export function resolvePackPaths<T>(config: T, dir: string, files: readonly stri
   };
   return walk(config) as T;
 }
+
+/**
+ * 本地文件（宿主 `load` 的 override 名单）把哪些包**整个**顶替了：包里每个文件的名字都在 names 里。
+ * 这些包不用递进来、不用装（0.1.18；user 2026-10-02「没有下载官方模型的时候，本地模型加载了还是没法启用语音」）。
+ * 宿主算「下载哪些 / 还缺哪些」和门面算「装哪些」用的是同一个函数。
+ */
+export function coveredPacks(v: VoiceDef, packs: Readonly<Record<string, EmbeddedPack>>, names: readonly string[]): Set<string> {
+  const set = new Set(names), out = new Set<string>();
+  if (!set.size) return out;
+  for (const slug of voicePacks(v)) { const files = packs[slug]?.manifest.files ?? []; if (files.length && files.every((f) => set.has(logicalName(f.path)))) out.add(slug); }
+  return out;
+}
+
+/** 手头有哪些包（has）→ 这个音色现在能念的语言：必装的包齐 + 那种语言另外要的包齐。必装的不齐 = 一种都不能念。 */
+export function availableLangs(v: VoiceDef, has: (slug: string) => boolean): SpeechLang[] {
+  if (!v.packs.every(has)) return [];
+  return voiceLangs(v).filter((l) => (v.langPacks[l] ?? []).every(has));
+}

@@ -1,8 +1,6 @@
 // 语音包纯函数 + SHA-256 的规格测试。created 2026-10-01 by Claude Fable 5.1
-import { createHash } from "node:crypto";
 import { describe, it, eq, assert } from "./runner.mjs";
 import { assembleFiles, resolvePackPaths, logicalName, voicePacks, voiceLangs } from "../src/packs.ts";
-import { Sha256, sha256Hex } from "../src/sha256.ts";
 
 /** 造一个小包：三个文件拼起来按 chunkBytes 切。 */
 function fakePack(sizes, chunkBytes) {
@@ -53,16 +51,6 @@ describe("packs/voicePacks", () => {
     eq(voicePacks(v, ["en"]).join(","), "voice-x,runtime-r,lang-en");
     eq(voicePacks(v, ["zh"]).join(","), "voice-x,runtime-r");
     eq(voicePacks({ ...v, langPacks: { ja: ["shared", "lang-ja"], en: ["shared"] } }).join(","), "voice-x,runtime-r,shared,lang-ja");
-  });
-});
-
-describe("sha256", () => {
-  it("已知向量 + 流式分片喂 == node crypto", () => {
-    const enc = new TextEncoder();
-    eq(sha256Hex(enc.encode("abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-    const buf = new Uint8Array(300_000); for (let i = 0; i < buf.length; i++) buf[i] = (i * 2654435761 + 12345) >>> 24;
-    const h = new Sha256(); for (let i = 0; i < buf.length; i += 4097) h.update(buf.subarray(i, Math.min(i + 4097, buf.length)));
-    eq(h.hex(), createHash("sha256").update(buf).digest("hex"));
   });
 });
 

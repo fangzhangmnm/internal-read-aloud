@@ -9,6 +9,9 @@ export declare interface AudioSink {
     play(clip: Clip): Playback;
 }
 
+/** 手头有哪些包（has）→ 这个音色现在能念的语言：必装的包齐 + 那种语言另外要的包齐。必装的不齐 = 一种都不能念。 */
+export declare function availableLangs(v: VoiceDef, has: (slug: string) => boolean): SpeechLang[];
+
 /** 一段合成好的声音。 */
 export declare interface Clip {
     samples: Float32Array;
@@ -17,6 +20,13 @@ export declare interface Clip {
 
 /** 一段正文的主语言（只看前 20000 个码元）。 */
 export declare function contextLang(text: string): SpeechLang;
+
+/**
+ * 本地文件（宿主 `load` 的 override 名单）把哪些包**整个**顶替了：包里每个文件的名字都在 names 里。
+ * 这些包不用递进来、不用装（0.1.18；user 2026-10-02「没有下载官方模型的时候，本地模型加载了还是没法启用语音」）。
+ * 宿主算「下载哪些 / 还缺哪些」和门面算「装哪些」用的是同一个函数。
+ */
+export declare function coveredPacks(v: VoiceDef, packs: Readonly<Record<string, EmbeddedPack>>, names: readonly string[]): Set<string>;
 
 export declare function createReadAloud(deps: ReadAloudDeps): ReadAloud;
 
@@ -75,6 +85,9 @@ export declare interface PackChunk {
     sha256: string;
 }
 
+/** 宿主递进来的包字节：包名 → 分片（顺序 = 清单 `chunks` 的顺序；每片的字节数必须和清单一致）。 */
+export declare type PackChunks = Readonly<Record<string, readonly Blob[]>>;
+
 export declare interface PackFile {
     path: string;
     bytes: number;
@@ -107,18 +120,6 @@ export declare interface PackManifest {
     notes?: string;
     createdAt?: string;
     createdBy?: string;
-}
-
-export declare interface PackProgress {
-    done: number;
-    total: number;
-}
-
-export declare interface PackStatus {
-    slug: string;
-    ready: boolean;
-    bytesCached: number;
-    bytesTotal: number;
 }
 
 /** 正在播的一段：done 在播完或被 stop 时兑现（true = 自然播完，false = 被停）。 */
@@ -236,34 +237,17 @@ export declare interface SherpaTtsEngineConfig {
 
 export declare interface SpeechEngine extends Synthesizer {
     /**
-     * override = 本地模型会换掉的文件名（同 load 的 override 的键）：文件全被换掉的包算「有了」——比如 `.onnx` + `.json` 换掉了整个权重包，
-     * 没下官方权重也能念（user 2026-10-02「没有下载官方模型的时候，本地模型加载了还是没法启用语音」）。
-     */
-    status(voice: string, opts?: {
-        override?: readonly string[];
-    }): Promise<VoiceStatus>;
-    /**
-     * 从 base（模型源，如 https://…/pwa-models）下载并逐片校验。可续传；已经有的包（别的音色、同源的兄弟 app 下过的）不重下。
-     * langs = 只下这几种语言要的包；不给 = 这个音色的全部语言。进度按「这次要的所有包」的总字节报。
-     */
-    download(voice: string, base: string, opts?: {
-        langs?: readonly SpeechLang[];
-        override?: readonly string[];
-        onProgress?: (p: PackProgress) => void;
-    }): Promise<VoiceStatus>;
-    /** 用户自己拿到的文件（任意个包的分片，或整包一个文件）：按内容哈希认领，验过才入缓存。文件名不作数。 */
-    importFiles(voice: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<VoiceStatus>;
-    /** 删掉这个音色的包；宿主内嵌的别的音色里、已经装着的那些还要用的包留着（运行时、共用的词典）。同源兄弟 app 是否在用看不见：它那边会显示「未下载」，重下即可。 */
-    delete(voice: string): Promise<void>;
-    /**
      * 把音色装进引擎（首次几秒）。synth 之前必须先 load。
-     * langs = 只装这几种语言（省内存：日语前端固定占 160 MB）；不给 = 已经下好的全部语言。必装的包不齐、或点名的语言一种都没下 → 拒绝，错误信息 "pack-missing"。
+     * chunks = 宿主递进来的包字节：包名 → 分片 Blob（顺序同清单，每片字节数必须和清单一致；库不校验哈希——字节从哪来、验没验过是宿主的事）。
+     *   没递的包 = 没有：必装的包不齐、或点名的语言一种都装不了 → 拒绝，错误信息 "pack-missing"；点名的语言里缺包的那几种不装、不报错（宿主自己先问清楚）。
+     * langs = 只装这几种语言（省内存：日语前端固定占 160 MB）；不给 = 递进来的包够装的全部语言。
      * override = 本地模型（user 2026-10-02「加一个本地上传的模型，这样我们改权重可以拖到网页上测试，而不用动远端」）：音色包里的文件名
-     *   → 用户自己的文件，这次装载用它代替包里那份（piper-plus：`model.onnx`、`config.json`）。只能换这个音色的包里有的文件名；文件全被换掉、
-     *   又没下载的包不用下载、不装（0.1.18；下载了的照装，好拿原配置来核对）；不进缓存、不校验哈希、不跨装载留着——下一次 load 不带 override 就换回包里的。换进来的配置和音色的音素表对不上
-     *   → 拒绝，错误信息以 "override-mismatch" 开头（包没下、没有原配置可比时不比）。
+     *   → 用户自己的文件，这次装载用它代替包里那份（piper-plus：`model.onnx`、`config.json`）。只能换这个音色的包里有的文件名；文件全被换掉的包
+     *   不用递进来、不装（递了的照装，好拿原配置来核对）；不校验哈希、不跨装载留着——下一次 load 不带 override 就换回包里的。换进来的配置和音色的音素表对不上
+     *   → 拒绝，错误信息以 "override-mismatch" 开头（包没递、没有原配置可比时不比）。
      */
-    load(voice: string, opts?: {
+    load(voice: string, opts: {
+        chunks: PackChunks;
         langs?: readonly SpeechLang[];
         override?: Readonly<Record<string, Blob>>;
     }): Promise<LoadResult>;
@@ -274,8 +258,6 @@ export declare interface SpeechEngine extends Synthesizer {
         override: string[];
         preset: boolean;
     } | null;
-    /** 最近一次 status / download / import / delete 的结论（同步问「能不能念」用）：给 lang = 那种语言能不能念；不给 = 有没有任何一种能念。没问过 = undefined。 */
-    isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
     /** 关掉所有 worker，归还内存（WASM 堆只涨不缩，这是唯一的归还办法）。之后再用会重新起。 */
     dispose(): void;
     /** 扔掉排着还没开始算的合成请求（以 "cancelled" 拒绝）；正在算的那一个算完为止。 */
@@ -287,12 +269,10 @@ export declare interface SpeechEngineDeps {
     workers: Record<string, WorkerSpec>;
     /** 宿主内嵌的音色定义：id → 定义。 */
     voices: Record<string, VoiceDef>;
-    /** 宿主内嵌的语音包清单（信任根）：音色定义点名的每个包都要在。 */
+    /** 宿主内嵌的语音包清单：音色定义点名的每个包都要在。库拿它看文件表（哪片是哪个文件、哪个压缩存放）；字节对不对清单是宿主的事。 */
     packs: Record<string, EmbeddedPack>;
     /** 引擎文件目录（相对页面或绝对）：只有二进制由宿主 vendor 的引擎才用（sherpa-onnx）；二进制随语音包走的引擎不用给。 */
     engineBase?: string;
-    /** 语音包缓存名；默认家族共享的 "pwa-models"（同源兄弟 app 下过的包直接能用）。 */
-    cacheName?: string;
 }
 
 /** 朗读用的语言。 */
@@ -356,18 +336,6 @@ export declare function voiceLangs(v: VoiceDef): SpeechLang[];
 
 /** 这个音色要用到的包（去重，顺序稳定）：必装的 + 点名那几种语言的；不点名 = 全部语言。 */
 export declare function voicePacks(v: VoiceDef, langs?: readonly SpeechLang[]): string[];
-
-/** 一个音色的状态（门面把它那几个包的状态合起来）。 */
-export declare interface VoiceStatus {
-    voice: string;
-    /** 这个音色所有语言的包都齐了。 */
-    ready: boolean;
-    /** 现在就能念的语言（必装包齐 + 那种语言的包齐）。 */
-    langs: SpeechLang[];
-    bytesCached: number;
-    bytesTotal: number;
-    packs: PackStatus[];
-}
 
 export declare interface WebAudioSink extends AudioSink {
     /** 在用户手势里同步调用：建 / 恢复 AudioContext。重复调用无害。 */

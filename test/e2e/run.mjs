@@ -1,5 +1,6 @@
 // @internal/read-aloud 整链测试：真引擎（sherpa-onnx wasm + piper-plus 后端）+ 真语音包（检疫桶里的测试包 / 本机打的つくよみちゃん五个小包）+ 真 Cache Storage + 真 Web Audio，
-// 在无头 Chromium 里把「下载 → 逐片校验 → 缓存 → 装进引擎 → 合成 → 连读」整条走一遍。用法：npm run e2e（先 build）。
+// 在无头 Chromium 里把「宿主递分片 → 装进引擎 → 合成 → 连读」整条走一遍。用法：npm run e2e（先 build）。
+// 0.1.20 起库不下载 / 不缓存（字节由宿主递进来）：下载 / 校验 / 缓存 / 导入 / 删除的整链测试在宿主 JustReadBooks test/model-packs.mjs。edited by Claude Fable 5.1 2026-10-06
 // 不进 npm test：要下 160 MB 本地文件、合成几句，约一分钟。这台机子的显卡在跑别的：浏览器 --disable-gpu。
 // created 2026-10-01 by Claude Fable 5.1
 import { createRequire } from "node:module";
@@ -75,26 +76,23 @@ try {
       { def: tsu, base: "/tsu" },
       // 假想的另一个音色：自己的权重（拿 sherpa 的中文测试包顶替，只测包的账，不装进引擎），和つくよみちゃん共用运行时与英语词典
       { def: { v: 1, id: "other-voice", name: "other", engine: "piper-plus", packs: [ZH, tsu.packs[1]], langPacks: { en: tsu.langPacks.en } }, base: "/tsu" },
-    ], "read-aloud-e2e");
+    ]);
   }, [ZH, JA]);
   const packs = made.packs, tsuDef = made.voices[TV];
   check("内嵌：四个音色、七个包", Object.keys(made.voices).length === 4 && Object.keys(packs).length === 7, JSON.stringify(Object.keys(packs)));
   check("音色定义里写的 packId 和清单字节的哈希逐个相同", Object.entries(tsuDef.packIds).every(([slug, id]) => packs[slug]?.packId === id) && Object.keys(tsuDef.packIds).length === 5);
-  const bytesOf = (slugs) => slugs.reduce((a, s) => a + packs[s].bytes, 0);
+  // 「宿主」先把四个音色的包都取到内存（测试页的 chunksFor）；之后引擎那头一个请求都不该再发
+  await page.evaluate(async (vs) => { for (const v of vs) await window.e2e.prefetch(v); }, [ZV, JV, TV, OV]);
+  const chunksBefore = chunkFetches;
 
-  // ══ 一、sherpa 引擎（一个音色 = 一个包）：包的全流程 ══
-  check("起步：没有包", await page.evaluate(async (v) => { const st = await window.e2e.engine.status(v); return st.ready === false && st.langs.length === 0; }, ZV));
-  const bad = await page.evaluate((v) => window.e2e.engine.download(v, "/tampered").then(() => "accepted", (e) => e.message), ZV);
-  check("被篡改的源：sha256 对不上 → 拒收", /sha256 mismatch/.test(bad), bad);
-  check("拒收之后仍然没有包（坏分片没进缓存）", await page.evaluate(async (v) => { const st = await window.e2e.engine.status(v); return st.ready === false && st.bytesCached === 0; }, ZV));
-  const dl = await page.evaluate(async (v) => { const seen = []; const st = await window.e2e.engine.download(v, "/models", { onProgress: (p) => seen.push(p.done) }); return { st, last: seen[seen.length - 1], n: seen.length }; }, ZV);
-  check("下载 + 逐片校验 → 就绪，进度报到满", dl.st.ready && dl.st.langs.join() === "zh" && dl.st.bytesCached === packs[ZH].bytes && dl.last === packs[ZH].bytes, JSON.stringify(dl));
-  let before = chunkFetches;
-  await page.evaluate((v) => window.e2e.engine.download(v, "/models"), ZV);
-  check("再下载一次：已有的分片不重取", chunkFetches === before, `${chunkFetches - before} refetched`);
-  check("同步问「能不能念」", await page.evaluate((v) => window.e2e.engine.isKnownReady(v) === true && window.e2e.engine.isKnownReady(v, "zh") === true && window.e2e.engine.isKnownReady(v, "ja") === false, ZV));
-
-  const ld = await page.evaluate((v) => window.e2e.engine.load(v), ZV);
+  // ══ 一、sherpa 引擎（一个音色 = 一个包）：宿主递分片的契约 ══
+  const noPack = await page.evaluate((v) => window.e2e.engine.load(v, { chunks: {} }).then(() => "loaded", (e) => e.message), ZV);
+  check("一个包都没递 → pack-missing", noPack === "pack-missing", noPack);
+  const short = await page.evaluate(async (v) => { const c = await window.e2e.chunksFor(v); const slug = Object.keys(c)[0]; c[slug] = c[slug].slice(0, -1); return window.e2e.engine.load(v, { chunks: c }).then(() => "loaded", (e) => e.message); }, ZV);
+  check("分片少一片 → pack-missing（门面按分片数判「没递」）", short === "pack-missing", short);
+  const wrongSize = await page.evaluate(async (v) => { const c = await window.e2e.chunksFor(v); const slug = Object.keys(c)[0]; c[slug] = c[slug].map((b, i) => (i === 0 ? b.slice(0, b.size - 1) : b)); return window.e2e.engine.load(v, { chunks: c }).then(() => "loaded", (e) => e.message); }, ZV);
+  check("分片字节数和清单对不上 → 拒绝、不装", /manifest says/.test(wrongSize) && await page.evaluate(() => window.e2e.engine.loaded() === null), wrongSize);
+  const ld = await page.evaluate((v) => window.e2e.load(v), ZV);
   check("装进引擎", ld.alreadyLoaded === false && ld.sampleRate > 8000 && ld.speakers >= 1 && ld.langs.join() === "zh", JSON.stringify(ld));
   const z = await page.evaluate(() => window.e2e.synth("今天天气很好，我们去公园散步吧。", "zh"));
   check("合成一句中文：有声音、时长合理", z.sec > 1 && z.sec < 8 && z.rms > 0.01, JSON.stringify(z));
@@ -143,46 +141,26 @@ try {
   check("喇叭连播 60 段：每段都收场，没有一段卡住", stress.ok === 60 && stress.slowest < 1500, JSON.stringify(stress));
   console.log(`  （60 段里浏览器发了 ${stress.endedEvents} 次 ended；最慢的一段 ${stress.slowest} ms）`);
 
-  await page.evaluate((v) => window.e2e.engine.delete(v), ZV);
-  check("删除：包没了、引擎也卸了", await page.evaluate(async (v) => (await window.e2e.engine.status(v)).bytesCached === 0 && window.e2e.engine.loaded() === null, ZV));
-  const noPack = await page.evaluate((v) => window.e2e.engine.load(v).then(() => "loaded", (e) => e.message), ZV);
-  check("没包就装 → pack-missing", noPack === "pack-missing", noPack);
-  const imp = await page.evaluate(async (v) => window.e2e.engine.importFiles(v, await window.e2e.voiceFiles(v)), ZV);
-  check("用户导入分片文件 → 就绪", imp.ready === true, JSON.stringify(imp));
-  const impBad = await page.evaluate(async (v) => { const files = await window.e2e.voiceFiles(v, "/tampered"); await window.e2e.engine.delete(v); return window.e2e.engine.importFiles(v, files).then(() => "accepted", (e) => e.message); }, ZV);
-  check("导入坏文件 → 拒收，缓存里什么都没进", /sha256 mismatch/.test(impBad) && await page.evaluate(async (v) => (await window.e2e.engine.status(v)).bytesCached === 0, ZV), impBad);
-  const impNone = await page.evaluate((v) => window.e2e.engine.importFiles(v, [new File(["hello"], "notes.txt")]).then(() => "accepted", (e) => e.message), ZV);
-  check("导入的文件一个都不认识 → no-matching-file", impNone === "no-matching-file", impNone);
-
-  await page.evaluate((v) => window.e2e.engine.download(v, "/models"), JV);
-  const lj = await page.evaluate((v) => window.e2e.engine.load(v), JV);
+  const lj = await page.evaluate((v) => window.e2e.load(v), JV);
   check("sherpa 日语包装进引擎（十个说话人）", lj.speakers === 10, JSON.stringify(lj));
   const j = await page.evaluate(() => window.e2e.synth("森の中で、小さな女の子が赤い花を見つけました。", "ja"));
   check("sherpa 合成一句日语：有声音、时长合理", j.sec > 2 && j.sec < 10 && j.rms > 0.01, JSON.stringify(j));
 
   // ══ 二、つくよみちゃん（piper-plus 引擎；一个音色 = 五个小包）══
   const [P_VOICE, P_RT] = tsuDef.packs, P_JA = tsuDef.langPacks.ja[0], P_EN = tsuDef.langPacks.en[0], P_ZH = tsuDef.langPacks.zh[0];
-  const dEn = await page.evaluate((v) => window.e2e.engine.download(v, "/tsu", { langs: ["en"] }), TV);
-  check("只下英语：权重 + 运行时 + 英语词典，别的不动", dEn.ready === false && dEn.langs.join() === "en" && dEn.bytesCached === bytesOf([P_VOICE, P_RT, P_EN]), JSON.stringify({ langs: dEn.langs, bytes: dEn.bytesCached }));
-  before = chunkFetches;
-  const dOther = await page.evaluate((v) => window.e2e.engine.download(v, "/models"), OV);
-  check("另一个音色共用运行时和英语词典：只取它自己的权重包", dOther.ready === true && chunkFetches - before === packs[ZH].chunks, `${chunkFetches - before} chunk fetches`);
-  const lEn = await page.evaluate((v) => window.e2e.engine.load(v), TV);
+  const lEn = await page.evaluate((v) => window.e2e.load(v, { langs: ["en"] }), TV);
   check("换引擎装载：只装英语（sherpa 的 worker 关掉）", lEn.langs.join() === "en" && lEn.speakers === 1 && lEn.sampleRate === 22050, JSON.stringify(lEn));
+  const partial = await page.evaluate((v) => window.e2e.load(v, { omit: [window.e2e.voices[v].langPacks.ja[0]] }), TV);
+  check("日语词典没递：装英语 + 中文，日语不装、不报错（缺哪种宿主自己先问清楚）", partial.langs.join() === "en,zh", JSON.stringify(partial));
   const e1 = await page.evaluate(() => window.e2e.synth("The quick brown fox jumps over the lazy dog.", "en", { keep: "en" }));
   check("英语一句：有声音、时长合理", e1.sec > 1.5 && e1.sec < 8 && e1.rms > 0.01, JSON.stringify(e1));
   const noJa = await page.evaluate(() => window.e2e.synth("こんにちは。", "ja").then(() => "ok", (e) => e.message));
   check("没装日语就念日语 → 报错说哪种语言没有", /language "ja" is not available/.test(noJa), noJa);
 
-  before = chunkFetches;
-  const dAll = await page.evaluate(async (v) => { const seen = []; const st = await window.e2e.engine.download(v, "/tsu", { onProgress: (p) => seen.push(p) }); return { st, first: seen[0], last: seen[seen.length - 1] }; }, TV);
-  check("补齐全部语言：只取缺的两个包（日语 1 片 + 中文 1 片）", dAll.st.ready && dAll.st.langs.join() === "ja,en,zh" && chunkFetches - before === 2, `${chunkFetches - before} chunk fetches; ${JSON.stringify(dAll.st.langs)}`);
-  check("进度按五个包的总字节报，已经有的算在起点里", dAll.first.total === bytesOf(Object.keys(tsuDef.packIds)) && dAll.first.done === bytesOf([P_VOICE, P_RT, P_EN]) && dAll.last.done === dAll.last.total, JSON.stringify([dAll.first, dAll.last]));
-
   const reqBefore = requests;
-  const lAll = await page.evaluate((v) => window.e2e.engine.load(v), TV);
+  const lAll = await page.evaluate((v) => window.e2e.load(v), TV);
   check("装进引擎：三种语言", lAll.langs.join() === "ja,en,zh" && lAll.alreadyLoaded === false, JSON.stringify(lAll));
-  const again = await page.evaluate((v) => window.e2e.engine.load(v), TV);
+  const again = await page.evaluate((v) => window.e2e.load(v), TV);
   check("同样的再装一次 = 已经装着", again.alreadyLoaded === true);
   // 连着改选项不积压（user 2026-10-02「ipad上调多了preset会不出声」）：每改一次都作废已合成的句子，排着没算的要一起扔掉，
   // 不然最新那一句排在一长串作废的请求后面。比「正常开始到出声」和「每 50 ms 改一次、改 8 次之后到出声」。
@@ -286,7 +264,7 @@ try {
     const [zD, z3, z0, eD, e9, jD, j0z] = [await Z(zs, "zh"), await Z(zs, "zh", 3), await Z(zs, "zh", 0), await Z(es, "en"), await Z(es, "en", 9), await Z(js, "ja"), await Z(js, "ja", 0)];
     check("月读（中英增强）：不给预设 = config 的默认（中文 = 3、英文 = 9、日文 = 0）；给 0 = 原版（和默认不一样长）", !zl.error && zl.preset === true && zD.sec === z3.sec && eD.sec === e9.sec && jD.sec === j0z.sec && z0.sec !== zD.sec, `zh ${zD.sec}/${z3.sec}/${z0.sec} en ${eD.sec}/${e9.sec} ja ${jD.sec}/${j0z.sec} ${JSON.stringify(zl)}`);
   } else console.log("  （检疫桶里没有 preset16 模型，跳过预设那几条）");
-  const back = await page.evaluate((v) => window.e2e.engine.load(v), TV);
+  const back = await page.evaluate((v) => window.e2e.load(v), TV);
   const back1 = await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh", { steadiness: 1, whole: false }));
   check("本地模型：不带 override 再装 → 换回包里的权重（和最开始一样长）", back.alreadyLoaded === false && back.override.length === 0 && back1.sec === base1.sec, `${back1.sec} / ${base1.sec}`);
   const dots = await page.evaluate(() => window.e2e.synth("……", "ja"));
@@ -309,6 +287,7 @@ try {
   const jev = await page.evaluate(() => window.e2e.events.slice());
   check("连读三句、中间一句念不了：读两句、跳过一句、发 end", jev.filter((x) => x.startsWith("sentence:")).join(",") === "sentence:0,sentence:2" && jev[jev.length - 1] === "end" && !jev.some((x) => x.startsWith("error")), jev.join(","));
   check("装载 + 合成 + 连读期间，浏览器一个请求都没发（引擎胶水没有自己去取任何东西）", requests === reqBefore, `${requests - reqBefore} request(s)`);
+  check("库从头到尾没取过一片分片（字节全是「宿主」递的）", chunkFetches === chunksBefore, `${chunkFetches - chunksBefore} chunk fetch(es) by the library`);
 
   if (SAMPLES) {
     await mkdir(SAMPLES, { recursive: true });
@@ -322,42 +301,22 @@ try {
     console.log(`  （三句 wav 已存到 ${SAMPLES}）`);
   }
 
-  // ── 删除：别的「装着的」音色还在用的包留着 ──
-  await page.evaluate((v) => window.e2e.engine.delete(v), TV);
-  const afterDel = await page.evaluate(async ([a, b]) => ({ full: await window.e2e.engine.status(a), other: await window.e2e.engine.status(b), loaded: window.e2e.engine.loaded() }), [TV, OV]);
-  check("删掉这个音色：它独有的包（权重、日语、中文）没了；另一个装着的音色共用的运行时和英语词典留着，照样就绪；引擎卸了", afterDel.full.langs.length === 0 && afterDel.full.bytesCached === bytesOf([P_RT, P_EN]) && afterDel.other.ready === true && afterDel.loaded === null, JSON.stringify({ langs: afterDel.full.langs, bytes: afterDel.full.bytesCached, other: afterDel.other.ready, loaded: afterDel.loaded }));
-  await page.evaluate((v) => window.e2e.engine.delete(v), OV);
-  const afterDel2 = await page.evaluate(async ([a, b]) => [(await window.e2e.engine.status(a)).bytesCached, (await window.e2e.engine.status(b)).bytesCached], [TV, OV]);
-  check("另一个音色也删：没装的音色不占着共用包，运行时和英语词典这下没了（它的权重包 zh-test 还装着在用，留着）", afterDel2[0] === 0 && afterDel2[1] === packs[ZH].bytes, JSON.stringify(afterDel2));
-  await page.evaluate((v) => window.e2e.engine.delete(v), ZV);
-  check("zh-test 也删：全没了", await page.evaluate(async (v) => (await window.e2e.engine.status(v)).bytesCached === 0, OV));
   // 没下官方权重也能用本地模型（user 2026-10-02「没有下载官方模型的时候，本地模型加载了还是没法启用语音」）：.onnx + .json 把权重包整个顶替 →
   // 只要运行时和那种语言的词典
   if (existsSync(join(LOCAL, "work/model-langemb/tsukuyomi-chan-zhen.config.json"))) {
-    const OVN = ["model.onnx", "config.json"], before0 = chunkFetches;
-    const dOnly = await page.evaluate(([v, o]) => window.e2e.engine.download(v, "/tsu", { langs: ["zh"], override: o }), [TV, OVN]);
-    const plain = await page.evaluate((v) => window.e2e.engine.status(v), TV);
-    check("本地模型顶替了整个权重包：只下运行时 + 中文词典（不取权重）；带 override 问 = 中文能念，不带问 = 还不能", chunkFetches - before0 === packs[tsuDef.packs[1]].chunks + packs[tsuDef.langPacks.zh[0]].chunks && dOnly.langs.join() === "zh" && plain.langs.length === 0, `${chunkFetches - before0} chunks; with ${JSON.stringify(dOnly.langs)} plain ${JSON.stringify(plain.langs)}`);
-    const lOnly = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-chan-zhen.onnx", "config.json": "/local/work/model-langemb/tsukuyomi-chan-zhen.config.json" }, ["zh"]), TV);
+    const noWeights = await page.evaluate((v) => window.e2e.engine.load(v, { langs: ["zh"], chunks: {} }).then(() => "loaded", (e) => e.message), TV);
+    check("没递权重包、也没有本地模型 → pack-missing", noWeights === "pack-missing", noWeights);
+    const lOnly = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-chan-zhen.onnx", "config.json": "/local/work/model-langemb/tsukuyomi-chan-zhen.config.json" }, ["zh"], [window.e2e.voices[v].packs[0]]), TV);
     const zOnly = lOnly.error ? null : await page.evaluate(() => window.e2e.synth("两个人也不是很会野外生存。", "zh"));
     check("没有官方权重：本地 .onnx + .json 装得上、念得出中文", !lOnly.error && lOnly.langs.join() === "zh" && zOnly && zOnly.rms > 0.01, JSON.stringify(lOnly) + JSON.stringify(zOnly));
-    const lHalf = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-chan-zhen.onnx" }, ["zh"]), TV);
+    const lHalf = await page.evaluate((v) => window.e2e.loadOverride(v, { "model.onnx": "/local/work/model-langemb/tsukuyomi-chan-zhen.onnx" }, ["zh"], [window.e2e.voices[v].packs[0]]), TV);
     check("没有官方权重、只给 .onnx（配置还得从权重包拿）→ pack-missing", lHalf.error === "pack-missing", JSON.stringify(lHalf));
-    await page.evaluate((v) => window.e2e.engine.delete(v), TV);
   } else console.log("  （检疫桶里没有增强版的配置，跳过「没下官方权重」那几条）");
 
-  // ── 按哈希导入：五个包的分片文件名撞名（四个都叫 chunk-000），外加清单文件 ──
-  const impT = await page.evaluate(async (v) => { const files = await window.e2e.voiceFiles(v); const st = await window.e2e.engine.importFiles(v, files); return { n: files.length, names: [...new Set(files.map((f) => f.name))].join(","), ready: st.ready, langs: st.langs }; }, TV);
-  check("一把文件按内容认领 → 五个包全就绪", impT.ready && impT.langs.join() === "ja,en,zh", JSON.stringify(impT));
-  const lImp = await page.evaluate((v) => window.e2e.engine.load(v, { langs: ["zh"] }), TV);
-  check("导入来的包装得进引擎（只装中文）", lImp.langs.join() === "zh", JSON.stringify(lImp));
-  const impTBad = await page.evaluate(async (v) => { const files = await window.e2e.voiceFiles(v, "/tsu-tampered"); await window.e2e.engine.delete(v); return window.e2e.engine.importFiles(v, files).then(() => "accepted", (e) => e.message); }, TV);
-  check("导入一把坏文件 → 拒收，一片都没进", /sha256 mismatch/.test(impTBad) && await page.evaluate(async (v) => (await window.e2e.engine.status(v)).bytesCached === 0, TV), impTBad);
-
   await page.evaluate(() => window.e2e.engine.dispose());
-  const after = await page.evaluate((v) => window.e2e.engine.status(v).then((st) => st.ready), JV);
-  check("dispose 之后再用：自动重新起 worker，缓存还在", after === true);
-  await page.evaluate((v) => Promise.all([window.e2e.engine.delete(v), caches.delete("read-aloud-e2e")]), JV);
+  const after = await page.evaluate((v) => window.e2e.load(v).then((r) => r.alreadyLoaded === false && window.e2e.engine.loaded()?.voice === v), JV);
+  check("dispose 之后再用：自动重新起 worker、重新装", after === true);
+  await page.evaluate(() => window.e2e.engine.dispose());
   check("零页面错误", errors.length === 0, errors.join(" | ").slice(0, 400));
 } finally { await browser.close(); srv.close(); }
 const failed = results.filter((x) => !x).length;

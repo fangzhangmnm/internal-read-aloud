@@ -14,6 +14,9 @@ export interface AudioSink {
 }
 
 // @public
+export function availableLangs(v: VoiceDef, has: (slug: string) => boolean): SpeechLang[];
+
+// @public
 export interface Clip {
     // (undocumented)
     sampleRate: number;
@@ -23,6 +26,9 @@ export interface Clip {
 
 // @public
 export function contextLang(text: string): SpeechLang;
+
+// @public
+export function coveredPacks(v: VoiceDef, packs: Readonly<Record<string, EmbeddedPack>>, names: readonly string[]): Set<string>;
 
 // @public (undocumented)
 export function createReadAloud(deps: ReadAloudDeps): ReadAloud;
@@ -90,6 +96,9 @@ export interface PackChunk {
     sha256: string;
 }
 
+// @public
+export type PackChunks = Readonly<Record<string, readonly Blob[]>>;
+
 // @public (undocumented)
 export interface PackFile {
     // (undocumented)
@@ -142,26 +151,6 @@ export interface PackManifest {
     totalBytes: number;
     // (undocumented)
     v: number;
-}
-
-// @public (undocumented)
-export interface PackProgress {
-    // (undocumented)
-    done: number;
-    // (undocumented)
-    total: number;
-}
-
-// @public (undocumented)
-export interface PackStatus {
-    // (undocumented)
-    bytesCached: number;
-    // (undocumented)
-    bytesTotal: number;
-    // (undocumented)
-    ready: boolean;
-    // (undocumented)
-    slug: string;
 }
 
 // @public
@@ -277,16 +266,9 @@ export interface SherpaTtsEngineConfig {
 // @public (undocumented)
 export interface SpeechEngine extends Synthesizer {
     cancelPending(): void;
-    delete(voice: string): Promise<void>;
     dispose(): void;
-    download(voice: string, base: string, opts?: {
-        langs?: readonly SpeechLang[];
-        override?: readonly string[];
-        onProgress?: (p: PackProgress) => void;
-    }): Promise<VoiceStatus>;
-    importFiles(voice: string, files: File[], onProgress?: (p: PackProgress) => void): Promise<VoiceStatus>;
-    isKnownReady(voice: string, lang?: SpeechLang): boolean | undefined;
-    load(voice: string, opts?: {
+    load(voice: string, opts: {
+        chunks: PackChunks;
         langs?: readonly SpeechLang[];
         override?: Readonly<Record<string, Blob>>;
     }): Promise<LoadResult>;
@@ -296,14 +278,10 @@ export interface SpeechEngine extends Synthesizer {
         override: string[];
         preset: boolean;
     } | null;
-    status(voice: string, opts?: {
-        override?: readonly string[];
-    }): Promise<VoiceStatus>;
 }
 
 // @public (undocumented)
 export interface SpeechEngineDeps {
-    cacheName?: string;
     engineBase?: string;
     packs: Record<string, EmbeddedPack>;
     voices: Record<string, VoiceDef>;
@@ -362,20 +340,6 @@ export function voiceLangs(v: VoiceDef): SpeechLang[];
 
 // @public
 export function voicePacks(v: VoiceDef, langs?: readonly SpeechLang[]): string[];
-
-// @public
-export interface VoiceStatus {
-    // (undocumented)
-    bytesCached: number;
-    // (undocumented)
-    bytesTotal: number;
-    langs: SpeechLang[];
-    // (undocumented)
-    packs: PackStatus[];
-    ready: boolean;
-    // (undocumented)
-    voice: string;
-}
 
 // @public (undocumented)
 export interface WebAudioSink extends AudioSink {
