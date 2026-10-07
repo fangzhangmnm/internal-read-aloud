@@ -88,6 +88,7 @@ export function createVits(ort, session, config) {
     if (names.has("speaker_embedding_mask")) feeds.speaker_embedding_mask = new ort.Tensor("int64", BigInt64Array.from([0n]), [1, 1]);
     if (names.has("sid")) feeds.sid = new ort.Tensor("int64", BigInt64Array.from([0n]), [1]);
     if (names.has("preset")) feeds.preset = new ort.Tensor("int64", BigInt64Array.from([big(preset)]), [1]);
+    if (names.has("dur_override")) feeds.dur_override = new ort.Tensor("float32", new Float32Array(n), [1, n]);   // all zeros = the model's own durations
     const res = await session.run(feeds);
     const raw = new Float32Array(res.output.data), d = res.durations ? new Float32Array(res.durations.data) : null;
     for (const k of Object.keys(res)) res[k].dispose?.();
@@ -98,5 +99,9 @@ export function createVits(ort, session, config) {
   }
   // preset convention (2026-10-02): a model MAY declare an int64 [1] input named `preset`; the user's signed int goes in as is and the
   // model decides what it means (tsukuyomi-preset16: clamp 0..15, one bit per module). Models without it are fed nothing.
+  // dur_override convention (2026-10-07, Claude Opus 5.5): a model MAY declare a float32 [1, n] input `dur_override` (per-phoneme duration in
+  // decoder frames; > 0 replaces the model's prediction, 0 keeps it). Reading aloud never overrides: it is fed all zeros, which is the model
+  // without the edit, sample for sample (voice-tsukuyomi-chan-zhen-dur-… == voice-tsukuyomi-chan-zhen-6lang-fp16-20261002). A singing app
+  // uses the same pack and fills it from its score — one copy of the weights for reading and singing.
   return { sampleRate, synthIds, hasPreset: names.has("preset") };
 }
