@@ -1,6 +1,6 @@
 {
   "name": "@internal/read-aloud",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "PWA 家族逐句朗读（TTS）：纯函数分句 + 连读控制器 + 懒加载的本机合成引擎门面。界面、持久化、图标、文案全归宿主；引擎二进制与语音包清单由宿主注入。",
   "type": "module",
   "license": "MIT",
@@ -22,7 +22,8 @@
     "./worker-sherpa": {
       "types": "./dist/worker/sherpa-entry.d.ts",
       "default": "./dist/worker/sherpa-entry.js"
-    }
+    },
+    "./backend/piper-plus/*": "./backend/piper-plus/*"
   },
   "scripts": {
     "build": "bash scripts/build.sh",

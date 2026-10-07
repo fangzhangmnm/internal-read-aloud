@@ -48,4 +48,6 @@ button.onclick = async () => {
 | `piper-plus` | `./worker-piper-plus`（module worker） | 随语音包来（运行时包、日语前端包），哈希验过 | 权重包 + 运行时包 + 每种语言一个前端包。JS 胶水 vendored 在 `backend/piper-plus/vendor/` |
 | `sherpa-onnx` | `./worker-sherpa`（classic worker） | 宿主 vendor，`engineBase` 给目录 | 一个包；引擎配置写在它的清单里（`SherpaTtsEngineConfig`：`config` 原样交给 sherpa 的 `OfflineTts`，包内文件名由库补上挂载目录） |
 
+**底层出口 `@internal/read-aloud/backend/piper-plus/*`**（0.1.22）：后端目录原样开放给不走库的合成流程、但要用同一份前端的宿主（例：唱歌——自己按乐谱拼音素、自己喂模型）。能拿到的 = 各语言前端（`ja-frontend.js` / `zh-g2p.js` / `en-g2p.js` / `encode.js` …）和 vendored 的两份胶水（`vendor/onnxruntime-web/ort.wasm.bundle.min.mjs`、`vendor/ojt/ojt.mjs`）。字节（模型、运行时 wasm、词典）照旧随语音包来，不在这里。这些文件不是库的稳定接口：库升级时宿主自己核对。
+
 现有音色：つくよみちゃん（piper-plus，日 / 英 / 中；日语是训练语言，英 / 中是带日语腔的迁移）。后端的说明、每个文件的出处和许可证：`backend/piper-plus/README.md`、`backend/piper-plus/LICENSES.md`。
